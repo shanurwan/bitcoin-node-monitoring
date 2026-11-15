@@ -1,0 +1,39 @@
+# Both monitors set job and node the way the rules expect. Give every bitcoind +
+# electrs pair its own node value.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: bitcoind
+spec:
+  jobLabel: ""
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bitcoind-exporter
+  endpoints:
+    - port: metrics
+      interval: 30s
+      relabelings:
+        - targetLabel: job
+          replacement: bitcoind
+        - targetLabel: node
+          replacement: mainnet-1
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: electrs
+spec:
+  # electrs serves /metrics without a Content-Type header; Prometheus 3 needs a
+  # fallback protocol to scrape it (prometheus-operator >= v0.79).
+  fallbackScrapeProtocol: PrometheusText0.0.4
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: electrs     # the label on your electrs Service
+  endpoints:
+    - port: monitoring                    # the Service port for --monitoring-addr
+      interval: 30s
+      relabelings:
+        - targetLabel: job
+          replacement: electrs
+        - targetLabel: node
+          replacement: mainnet-1

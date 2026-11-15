@@ -1,0 +1,707 @@
+# promtool test rules tests/alerts.test.yml
+# Every alert has at least one case where it fires and one where it must not.
+rule_files:
+  - ../rules/bitcoin-node.rules.yml
+  - ../rules/bitcoin-node.alerts.yml
+  - ../rules/electrs-slo.yml
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------- bitcoind
+  - name: bitcoind RPC fails
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_up{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '1 1 0x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: BitcoindDown
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: BitcoindDown
+        exp_alerts:
+          - exp_labels: {alertname: BitcoindDown, severity: critical, job: bitcoind, node: a, instance: "exp:9332"}
+            exp_annotations:
+              description: "The exporter at exp:9332 cannot reach bitcoind's JSON-RPC (or the exporter itself is down) for 5 minutes. electrs on this node cannot index new blocks or relay transactions."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-down.md"
+              summary: "bitcoind on a is not answering RPC"
+
+  - name: bitcoind exporter not scraped
+    interval: 1m
+    input_series:
+      - series: 'up{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BitcoindDown
+        exp_alerts:
+          - exp_labels: {alertname: BitcoindDown, severity: critical, job: bitcoind, node: a, instance: "exp:9332"}
+            exp_annotations:
+              description: "The exporter at exp:9332 cannot reach bitcoind's JSON-RPC (or the exporter itself is down) for 5 minutes. electrs on this node cannot index new blocks or relay transactions."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-down.md"
+              summary: "bitcoind on a is not answering RPC"
+
+  - name: bitcoind healthy
+    interval: 1m
+    input_series:
+      - series: 'up{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '1x120'
+      - series: 'bitcoind_up{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '1x120'
+      - series: 'bitcoind_peers{job="bitcoind", node="a", instance="exp:9332", direction="in"}'
+        values: '12x120'
+      - series: 'bitcoind_peers{job="bitcoind", node="a", instance="exp:9332", direction="out"}'
+        values: '10x120'
+      - series: 'bitcoind_blocks{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '100x50 101x70'
+      - series: 'bitcoind_headers{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '100x50 101x70'
+      - series: 'bitcoind_initial_block_download{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '0x120'
+      - series: 'bitcoind_uptime_seconds{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '3600+60x120'
+      - series: 'bitcoind_warnings{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '0x120'
+    alert_rule_test:
+      - {eval_time: 100m, alertname: BitcoindDown, exp_alerts: []}
+      - {eval_time: 100m, alertname: BitcoindNoPeers, exp_alerts: []}
+      - {eval_time: 100m, alertname: BitcoindLowOutboundPeers, exp_alerts: []}
+      - {eval_time: 100m, alertname: BitcoindNoNewBlocks, exp_alerts: []}
+      - {eval_time: 100m, alertname: BitcoindBlocksBehindHeaders, exp_alerts: []}
+      - {eval_time: 100m, alertname: BitcoindInitialBlockDownloadStalled, exp_alerts: []}
+      - {eval_time: 100m, alertname: BitcoindRestartLoop, exp_alerts: []}
+      - {eval_time: 100m, alertname: BitcoindWarnings, exp_alerts: []}
+
+  - name: bitcoind has no peers
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_peers{job="bitcoind", node="a", instance="exp:9332", direction="in"}'
+        values: '0x20'
+      - series: 'bitcoind_peers{job="bitcoind", node="a", instance="exp:9332", direction="out"}'
+        values: '3 0x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: BitcoindNoPeers
+        exp_alerts:
+          - exp_labels: {alertname: BitcoindNoPeers, severity: critical, node: a}
+            exp_annotations:
+              description: "bitcoind has had zero P2P connections for 10 minutes. It will not see new blocks or transactions."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-no-peers.md"
+              summary: "bitcoind on a has no peers"
+      - eval_time: 12m
+        alertname: BitcoindLowOutboundPeers
+        exp_alerts: []
+
+  - name: bitcoind has few outbound peers
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_peers{job="bitcoind", node="a", instance="exp:9332", direction="in"}'
+        values: '40x40'
+      - series: 'bitcoind_peers{job="bitcoind", node="a", instance="exp:9332", direction="out"}'
+        values: '3x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BitcoindLowOutboundPeers
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: BitcoindLowOutboundPeers
+        exp_alerts:
+          - exp_labels: {alertname: BitcoindLowOutboundPeers, severity: warning, node: a}
+            exp_annotations:
+              description: "bitcoind normally keeps 10 outbound connections (8 full-relay, 2 block-relay-only). Fewer than 4 for 30 minutes makes the node easier to isolate and slower to hear about blocks."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-low-outbound-peers.md"
+              summary: "bitcoind on a has 3 outbound peers"
+      - eval_time: 31m
+        alertname: BitcoindNoPeers
+        exp_alerts: []
+
+  - name: bitcoind height stuck
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_blocks{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '100x120'
+      - series: 'bitcoind_initial_block_download{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '0x120'
+    alert_rule_test:
+      # No sample from 90 minutes ago yet: a fresh Prometheus or target must not alert.
+      - eval_time: 30m
+        alertname: BitcoindNoNewBlocks
+        exp_alerts: []
+      - eval_time: 96m
+        alertname: BitcoindNoNewBlocks
+        exp_alerts:
+          - exp_labels: {alertname: BitcoindNoNewBlocks, severity: critical, job: bitcoind, node: a, instance: "exp:9332"}
+            exp_annotations:
+              description: "bitcoind's height has not changed for 95 minutes. Either the node is stuck or partitioned, or the network really is slow; compare with another source before acting."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-no-new-blocks.md"
+              summary: "bitcoind on a has not seen a new block for 95 minutes"
+
+  - name: bitcoind validated chain behind headers
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_blocks{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '100x40'
+      - series: 'bitcoind_headers{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '110x40'
+      - series: 'bitcoind_initial_block_download{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 31m
+        alertname: BitcoindBlocksBehindHeaders
+        exp_alerts:
+          - exp_labels: {alertname: BitcoindBlocksBehindHeaders, severity: warning, job: bitcoind, node: a, instance: "exp:9332"}
+            exp_annotations:
+              description: "bitcoind knows about headers it has not validated for 30 minutes: block download or validation is stuck (slow disk, no peers serving blocks, or a block that fails validation)."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-blocks-behind-headers.md"
+              summary: "bitcoind on a is 10 blocks behind its headers"
+
+  - name: bitcoind behind headers during IBD is the IBD alert's job
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_blocks{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '0+100x60'
+      - series: 'bitcoind_headers{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '900000x60'
+      - series: 'bitcoind_initial_block_download{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '1x60'
+    alert_rule_test:
+      - {eval_time: 50m, alertname: BitcoindBlocksBehindHeaders, exp_alerts: []}
+      - {eval_time: 50m, alertname: BitcoindInitialBlockDownloadStalled, exp_alerts: []}
+
+  - name: bitcoind IBD stuck
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_blocks{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '5000x60'
+      - series: 'bitcoind_initial_block_download{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: BitcoindInitialBlockDownloadStalled
+        exp_alerts: []
+      - eval_time: 46m
+        alertname: BitcoindInitialBlockDownloadStalled
+        exp_alerts:
+          - exp_labels: {alertname: BitcoindInitialBlockDownloadStalled, severity: warning, job: bitcoind, node: a, instance: "exp:9332"}
+            exp_annotations:
+              description: "bitcoind is in initial block download and its height has not changed for 45 minutes."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-initial-block-download-stalled.md"
+              summary: "bitcoind initial block download on a is not progressing"
+
+  - name: bitcoind keeps restarting
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_uptime_seconds{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '100 160 5 65 3 63 2 62'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: BitcoindRestartLoop
+        exp_alerts:
+          - exp_labels: {alertname: BitcoindRestartLoop, severity: warning, job: bitcoind, node: a, instance: "exp:9332"}
+            exp_annotations:
+              description: "bitcoind's uptime went back to zero at least 3 times in the last hour."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-restart-loop.md"
+              summary: "bitcoind on a restarted 3 times in an hour"
+
+  - name: bitcoind reports a warning
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_warnings{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: BitcoindWarnings
+        exp_alerts:
+          - exp_labels: {alertname: BitcoindWarnings, severity: warning, job: bitcoind, node: a, instance: "exp:9332"}
+            exp_annotations:
+              description: "getblockchaininfo returns warnings, for example unknown new consensus rules activated, a clock out of sync with peers, or a pre-release build."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-warnings.md"
+              summary: "bitcoind on a reports 1 warning(s)"
+
+  # ---------------------------------------------------------------- electrs
+  - name: electrs not scraped
+    interval: 1m
+    input_series:
+      - series: 'up{job="electrs", node="a", instance="electrs:4224"}'
+        values: '1 0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ElectrsDown
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: ElectrsDown
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsDown, severity: critical, job: electrs, node: a, instance: "electrs:4224"}
+            exp_annotations:
+              description: "Prometheus cannot scrape electrs at electrs:4224 for 5 minutes. The monitoring endpoint starts before indexing, so this means the process is not running or is not reachable."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-down.md"
+              summary: "electrs on a is down"
+
+  - name: electrs healthy and synced
+    interval: 1m
+    input_series:
+      - series: 'up{job="electrs", node="a", instance="electrs:4224"}'
+        values: '1x120'
+      - series: 'bitcoind_blocks{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '100x60 101x60'
+      - series: 'tip_height{job="electrs", node="a", instance="electrs:4224"}'
+        values: '100x61 101x59'
+      - series: 'initial_sync_height{job="electrs", node="a", instance="electrs:4224"}'
+        values: '100x120'
+      - series: 'rocksdb_num_running_compactions{job="electrs", node="a", instance="electrs:4224", db="history_db"}'
+        values: '0x120'
+      - series: 'electrs_main_loop_count{job="electrs", node="a", instance="electrs:4224"}'
+        values: '0+12x120'
+      - series: 'stale_cleanup_failing{job="electrs", node="a", instance="electrs:4224"}'
+        values: '0x120'
+      - series: 'rocksdb_is_write_stopped{job="electrs", node="a", instance="electrs:4224", db="history_db"}'
+        values: '0x120'
+      - series: 'rocksdb_background_errors_total{job="electrs", node="a", instance="electrs:4224", db="history_db"}'
+        values: '0x120'
+      - series: 'daemon_rpc_conn_handshake{job="electrs", node="a", instance="electrs:4224", result="ok"}'
+        values: '0+1x120'
+      - series: 'daemon_rpc_proxied{job="electrs", node="a", instance="electrs:4224", result="ok"}'
+        values: '0+30x120'
+      - series: 'mempool_sync_failed_to_index{job="electrs", node="a", instance="electrs:4224"}'
+        values: '0x120'
+      - series: 'electrum_connection_errors_total{job="electrs", node="a", instance="electrs:4224", reason="accept_error"}'
+        values: '0 0 4x118'
+      - series: 'process_cpu_usage{job="electrs", node="a", instance="electrs:4224", type="utime"}'
+        values: '0+3x120'
+      - series: 'process_memory_rss{job="electrs", node="a", instance="electrs:4224"}'
+        values: '21474836480x120'
+    alert_rule_test:
+      # A one-block lag while electrs indexes a new block is normal.
+      - {eval_time: 61m, alertname: ElectrsIndexBehind, exp_alerts: []}
+      - {eval_time: 100m, alertname: ElectrsDown, exp_alerts: []}
+      - {eval_time: 100m, alertname: ElectrsIndexBehind, exp_alerts: []}
+      - {eval_time: 100m, alertname: ElectrsInitialSyncStalled, exp_alerts: []}
+      - {eval_time: 100m, alertname: ElectrsMainLoopStalled, exp_alerts: []}
+      - {eval_time: 100m, alertname: ElectrsStaleCleanupFailing, exp_alerts: []}
+      - {eval_time: 100m, alertname: ElectrsRocksDBWriteStopped, exp_alerts: []}
+      - {eval_time: 100m, alertname: ElectrsRocksDBBackgroundErrors, exp_alerts: []}
+      - {eval_time: 100m, alertname: ElectrsBitcoindRPCErrors, exp_alerts: []}
+      - {eval_time: 100m, alertname: ElectrsMempoolSyncFailing, exp_alerts: []}
+      - {eval_time: 100m, alertname: ElectrsElectrumFdLimit, exp_alerts: []}
+      - {eval_time: 100m, alertname: ElectrsRestartLoop, exp_alerts: []}
+      - {eval_time: 100m, alertname: ElectrsMemoryHigh, exp_alerts: []}
+
+  - name: electrs falls behind bitcoind
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_blocks{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '110x20'
+      - series: 'tip_height{job="electrs", node="a", instance="electrs:4224"}'
+        values: '100x20'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ElectrsIndexBehind
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsIndexBehind, severity: critical, node: a}
+            exp_annotations:
+              description: "electrs has finished its initial sync but has been more than 3 blocks behind bitcoind for 10 minutes. Clients see stale balances and confirmations."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-index-behind.md"
+              summary: "electrs on a is 10 blocks behind bitcoind"
+
+  - name: electrs in initial sync is not behind
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_blocks{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '161000x60'
+      - series: 'tip_height{job="electrs", node="a", instance="electrs:4224"}'
+        values: '0x60'
+      - series: 'initial_sync_height{job="electrs", node="a", instance="electrs:4224"}'
+        values: '0+500x60'
+      - series: 'rocksdb_num_running_compactions{job="electrs", node="a", instance="electrs:4224", db="history_db"}'
+        values: '0x60'
+    alert_rule_test:
+      - {eval_time: 50m, alertname: ElectrsIndexBehind, exp_alerts: []}
+      - {eval_time: 50m, alertname: ElectrsInitialSyncStalled, exp_alerts: []}
+
+  - name: electrs initial sync stuck
+    interval: 1m
+    input_series:
+      - series: 'tip_height{job="electrs", node="a", instance="electrs:4224"}'
+        values: '0x60'
+      - series: 'initial_sync_height{job="electrs", node="a", instance="electrs:4224"}'
+        values: '28237x60'
+      - series: 'rocksdb_num_running_compactions{job="electrs", node="a", instance="electrs:4224", db="txstore_db"}'
+        values: '0x60'
+      - series: 'rocksdb_num_running_compactions{job="electrs", node="a", instance="electrs:4224", db="history_db"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: ElectrsInitialSyncStalled
+        exp_alerts: []
+      - eval_time: 46m
+        alertname: ElectrsInitialSyncStalled
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsInitialSyncStalled, severity: warning, node: a}
+            exp_annotations:
+              description: "electrs has not finished its initial sync, no block batch has completed for 45 minutes, and RocksDB is not compacting."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-initial-sync-stalled.md"
+              summary: "electrs initial sync on a is not progressing"
+
+  - name: electrs full compaction after initial sync is not a stall
+    interval: 1m
+    input_series:
+      - series: 'tip_height{job="electrs", node="a", instance="electrs:4224"}'
+        values: '0x120'
+      - series: 'initial_sync_height{job="electrs", node="a", instance="electrs:4224"}'
+        values: '161323x120'
+      - series: 'rocksdb_num_running_compactions{job="electrs", node="a", instance="electrs:4224", db="history_db"}'
+        values: '1x120'
+    alert_rule_test:
+      - {eval_time: 100m, alertname: ElectrsInitialSyncStalled, exp_alerts: []}
+
+  - name: electrs main loop stuck
+    interval: 1m
+    input_series:
+      - series: 'electrs_main_loop_count{job="electrs", node="a", instance="electrs:4224"}'
+        values: '0+12x10 132x20'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: ElectrsMainLoopStalled
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: ElectrsMainLoopStalled
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsMainLoopStalled, severity: critical, job: electrs, node: a, instance: "electrs:4224"}
+            exp_annotations:
+              description: "The main loop, which indexes new blocks and syncs the mempool every 5 seconds, has not run for 15 minutes while the process is still being scraped."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-main-loop-stalled.md"
+              summary: "electrs main loop on a is stuck"
+
+  - name: electrs stale cleanup failing
+    interval: 1m
+    input_series:
+      - series: 'stale_cleanup_failing{job="electrs", node="a", instance="electrs:4224"}'
+        values: '0 1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ElectrsStaleCleanupFailing
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsStaleCleanupFailing, severity: critical, job: electrs, node: a, instance: "electrs:4224"}
+            exp_annotations:
+              description: "electrs reports that stale block history cleanup is failing, and indexing cannot advance until it succeeds."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-stale-cleanup-failing.md"
+              summary: "electrs on a cannot clean up after a reorg"
+
+  - name: RocksDB write stop and background error
+    interval: 1m
+    input_series:
+      - series: 'rocksdb_is_write_stopped{job="electrs", node="a", instance="electrs:4224", db="history_db"}'
+        values: '1x10'
+      - series: 'rocksdb_is_write_stopped{job="electrs", node="a", instance="electrs:4224", db="txstore_db"}'
+        values: '0x10'
+      - series: 'rocksdb_background_errors_total{job="electrs", node="a", instance="electrs:4224", db="txstore_db"}'
+        values: '0 0 0 1x7'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ElectrsRocksDBWriteStopped
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsRocksDBWriteStopped, severity: critical, node: a, db: history_db}
+            exp_annotations:
+              description: "RocksDB has stopped writes to history_db for 5 minutes, usually because compaction cannot keep up or the disk is full."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-rocksdb-write-stopped.md"
+              summary: "RocksDB history_db writes are stopped on a"
+      - eval_time: 2m
+        alertname: ElectrsRocksDBBackgroundErrors
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ElectrsRocksDBBackgroundErrors
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsRocksDBBackgroundErrors, severity: critical, job: electrs, node: a, instance: "electrs:4224", db: txstore_db}
+            exp_annotations:
+              description: "A flush or compaction in txstore_db failed. RocksDB may switch the database to read-only."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-rocksdb-background-errors.md"
+              summary: "RocksDB txstore_db on a hit background errors"
+
+  - name: electrs RPC connections to bitcoind rejected
+    interval: 1m
+    input_series:
+      - series: 'daemon_rpc_conn_handshake{job="electrs", node="a", instance="electrs:4224", result="rejected"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ElectrsBitcoindRPCErrors
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsBitcoindRPCErrors, severity: warning, node: a}
+            exp_annotations:
+              description: "electrs's RPC connections to bitcoind are being rejected or timing out, or proxied RPC calls are failing. A common cause is bitcoind's -rpcmaxconnections or -rpcthreads limit."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-bitcoind-rpc-errors.md"
+              summary: "electrs on a is failing to talk to bitcoind"
+
+  - name: electrs proxied RPC busy
+    interval: 1m
+    input_series:
+      - series: 'daemon_rpc_proxied{job="electrs", node="a", instance="electrs:4224", result="busy"}'
+        values: '0+2x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ElectrsBitcoindRPCErrors
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsBitcoindRPCErrors, severity: warning, node: a}
+            exp_annotations:
+              description: "electrs's RPC connections to bitcoind are being rejected or timing out, or proxied RPC calls are failing. A common cause is bitcoind's -rpcmaxconnections or -rpcthreads limit."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-bitcoind-rpc-errors.md"
+              summary: "electrs on a is failing to talk to bitcoind"
+
+  - name: bitcoind RPC slow for electrs
+    interval: 1m
+    input_series:
+      - series: 'tip_height{job="electrs", node="a", instance="electrs:4224"}'
+        values: '100x30'
+      - series: 'daemon_rpc_bucket{job="electrs", node="a", instance="electrs:4224", method="getrawtransaction", le="2.5"}'
+        values: '0x30'
+      - series: 'daemon_rpc_bucket{job="electrs", node="a", instance="electrs:4224", method="getrawtransaction", le="5"}'
+        values: '0+10x30'
+      - series: 'daemon_rpc_bucket{job="electrs", node="a", instance="electrs:4224", method="getrawtransaction", le="+Inf"}'
+        values: '0+10x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ElectrsBitcoindRPCSlow
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsBitcoindRPCSlow, severity: warning, node: a}
+            exp_annotations:
+              description: "The 99th percentile of electrs's RPC calls to bitcoind (excluding getblock) has been above 2.5 s for 15 minutes."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-bitcoind-rpc-slow.md"
+              summary: "bitcoind RPC p99 latency on a is 4.975s"
+
+  - name: slow getblock does not count
+    interval: 1m
+    input_series:
+      - series: 'tip_height{job="electrs", node="a", instance="electrs:4224"}'
+        values: '100x30'
+      - series: 'daemon_rpc_bucket{job="electrs", node="a", instance="electrs:4224", method="getblock", le="2.5"}'
+        values: '0x30'
+      - series: 'daemon_rpc_bucket{job="electrs", node="a", instance="electrs:4224", method="getblock", le="+Inf"}'
+        values: '0+10x30'
+      - series: 'daemon_rpc_bucket{job="electrs", node="a", instance="electrs:4224", method="getblockheader", le="2.5"}'
+        values: '0+10x30'
+      - series: 'daemon_rpc_bucket{job="electrs", node="a", instance="electrs:4224", method="getblockheader", le="+Inf"}'
+        values: '0+10x30'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: ElectrsBitcoindRPCSlow, exp_alerts: []}
+
+  - name: electrs mempool sync failing
+    interval: 1m
+    input_series:
+      - series: 'mempool_sync_failed_to_index{job="electrs", node="a", instance="electrs:4224"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ElectrsMempoolSyncFailing
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsMempoolSyncFailing, severity: warning, job: electrs, node: a, instance: "electrs:4224"}
+            exp_annotations:
+              description: "electrs failed to index fetched mempool transactions more than twice in 30 minutes. Unconfirmed history and fee data may be incomplete."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-mempool-sync-failing.md"
+              summary: "electrs mempool sync on a keeps failing"
+
+  - name: electrs at fd limit
+    interval: 1m
+    input_series:
+      - series: 'electrum_connection_errors_total{job="electrs", node="a", instance="electrs:4224", reason="fd_limit"}'
+        values: '0 0 5x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ElectrsElectrumFdLimit
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsElectrumFdLimit, severity: warning, job: electrs, node: a, instance: "electrs:4224", reason: fd_limit}
+            exp_annotations:
+              description: "electrs refused 5 Electrum connections in 10 minutes because it is close to its open-file limit."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-electrum-fd-limit.md"
+              summary: "electrs on a is refusing Electrum connections at its file descriptor limit"
+
+  - name: electrs keeps restarting
+    interval: 1m
+    input_series:
+      - series: 'process_cpu_usage{job="electrs", node="a", instance="electrs:4224", type="utime"}'
+        values: '10 20 1 2 0.5 1 0.1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ElectrsRestartLoop
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsRestartLoop, severity: warning, job: electrs, node: a, instance: "electrs:4224", type: utime}
+            exp_annotations:
+              description: "electrs's CPU time counter went back to zero at least 3 times in the last hour, so the process keeps restarting."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-restart-loop.md"
+              summary: "electrs on a restarted 3 times in an hour"
+
+  - name: electrs memory over 85% of budget
+    interval: 1m
+    input_series:
+      # 60 GiB against the default 64 GiB budget.
+      - series: 'process_memory_rss{job="electrs", node="a", instance="electrs:4224"}'
+        values: '64424509440x20'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ElectrsMemoryHigh
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsMemoryHigh, severity: warning, job: electrs, node: a, instance: "electrs:4224"}
+            exp_annotations:
+              description: "electrs's resident memory has been above 85% of bitcoin_node:electrs_memory_budget_bytes for 10 minutes. Initial sync and the full compaction after it are the peaks; an OOM kill there restarts a long job."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-memory-high.md"
+              summary: "electrs on a uses 60GiB, over 85% of its memory budget"
+
+  # ---------------------------------------------------------------- host
+  - name: data disk filling
+    interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{job="node", node="a", instance="host:9100", mountpoint="/data", fstype="xfs", device="/dev/sdb"}'
+        values: '240000000000-100000000x60'
+      - series: 'node_filesystem_size_bytes{job="node", node="a", instance="host:9100", mountpoint="/data", fstype="xfs", device="/dev/sdb"}'
+        values: '1000000000000x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: BitcoinNodeDiskWillFill
+        exp_alerts:
+          - exp_labels: {alertname: BitcoinNodeDiskWillFill, severity: warning, job: node, node: a, instance: "host:9100", mountpoint: /data, fstype: xfs, device: /dev/sdb}
+            exp_annotations:
+              description: "At the growth rate of the last 6 hours, /data runs out of space within 48 hours, and it is already more than 75% full."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoin-node-disk.md"
+              summary: "/data on a will fill within 48 hours"
+      - eval_time: 40m
+        alertname: BitcoinNodeDiskAlmostFull
+        exp_alerts: []
+
+  - name: data disk full but not growing, then almost full
+    interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{job="node", node="a", instance="host:9100", mountpoint="/data", fstype="xfs", device="/dev/sdb"}'
+        values: '240000000000x40 40000000000x20'
+      - series: 'node_filesystem_size_bytes{job="node", node="a", instance="host:9100", mountpoint="/data", fstype="xfs", device="/dev/sdb"}'
+        values: '1000000000000x60'
+    alert_rule_test:
+      - {eval_time: 39m, alertname: BitcoinNodeDiskWillFill, exp_alerts: []}
+      - {eval_time: 39m, alertname: BitcoinNodeDiskAlmostFull, exp_alerts: []}
+      - eval_time: 47m
+        alertname: BitcoinNodeDiskAlmostFull
+        exp_alerts:
+          - exp_labels: {alertname: BitcoinNodeDiskAlmostFull, severity: critical, job: node, node: a, instance: "host:9100", mountpoint: /data, fstype: xfs, device: /dev/sdb}
+            exp_annotations:
+              description: "Less than 5% of /data is free. bitcoind shuts down when it cannot write, and RocksDB stops writes."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoin-node-disk.md"
+              summary: "/data on a is 4% free"
+
+  # ---------------------------------------------------------------- SLOs
+  - name: REST 5xx at 9% burns the availability budget
+    interval: 1m
+    input_series:
+      - series: 'rest_request_duration_seconds_count{job="electrs", node="a", instance="electrs:4224", method="GET", route="tx/:txid", status="200"}'
+        values: '0+60x200'
+      - series: 'rest_request_duration_seconds_count{job="electrs", node="a", instance="electrs:4224", method="GET", route="tx/:txid", status="500"}'
+        values: '0+6x200'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ElectrsRESTAvailabilityBurnFast
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsRESTAvailabilityBurnFast, severity: critical, node: a, slo: rest-availability}
+            exp_annotations:
+              description: "Objective: 99.5% of REST requests that did not return a 5xx status over 30 days. At the current rate the error budget would be gone within 2 to 5 days."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-rest-availability-slo.md"
+              summary: "electrs rest-availability SLO on a is burning its error budget (fast)"
+      - eval_time: 90m
+        alertname: ElectrsRESTAvailabilityBurnSlow
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsRESTAvailabilityBurnSlow, severity: warning, node: a, slo: rest-availability}
+            exp_annotations:
+              description: "Objective: 99.5% of REST requests that did not return a 5xx status over 30 days. At the current rate the error budget would be gone within 10 to 30 days."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-rest-availability-slo.md"
+              summary: "electrs rest-availability SLO on a is burning its error budget (slow)"
+
+  - name: REST 5xx at 0.33% stays within budget
+    interval: 1m
+    input_series:
+      - series: 'rest_request_duration_seconds_count{job="electrs", node="a", instance="electrs:4224", method="GET", route="tx/:txid", status="200"}'
+        values: '0+60x200'
+      - series: 'rest_request_duration_seconds_count{job="electrs", node="a", instance="electrs:4224", method="GET", route="tx/:txid", status="500"}'
+        values: '0+0.2x200'
+      - series: 'rest_request_duration_seconds_bucket{job="electrs", node="a", instance="electrs:4224", method="GET", route="tx/:txid", status="200", le="1"}'
+        values: '0+60x200'
+      - series: 'rest_request_duration_seconds_bucket{job="electrs", node="a", instance="electrs:4224", method="GET", route="tx/:txid", status="500", le="1"}'
+        values: '0+0.2x200'
+      - series: 'electrum_rpc_count{job="electrs", node="a", instance="electrs:4224", method="blockchain.scripthash.get_history"}'
+        values: '0+60x200'
+      - series: 'electrum_rpc_bucket{job="electrs", node="a", instance="electrs:4224", method="blockchain.scripthash.get_history", le="2.5"}'
+        values: '0+59.8x200'
+    alert_rule_test:
+      - {eval_time: 190m, alertname: ElectrsRESTAvailabilityBurnFast, exp_alerts: []}
+      - {eval_time: 190m, alertname: ElectrsRESTAvailabilityBurnSlow, exp_alerts: []}
+      - {eval_time: 190m, alertname: ElectrsRESTLatencyBurnFast, exp_alerts: []}
+      - {eval_time: 190m, alertname: ElectrsRESTLatencyBurnSlow, exp_alerts: []}
+      - {eval_time: 190m, alertname: ElectrsElectrumLatencyBurnFast, exp_alerts: []}
+      - {eval_time: 190m, alertname: ElectrsElectrumLatencyBurnSlow, exp_alerts: []}
+
+  - name: high error ratio on almost no traffic does not page
+    interval: 1m
+    input_series:
+      # 1 request per minute in total, half of them 5xx.
+      - series: 'rest_request_duration_seconds_count{job="electrs", node="a", instance="electrs:4224", method="GET", route="tx/:txid", status="200"}'
+        values: '0+0.5x200'
+      - series: 'rest_request_duration_seconds_count{job="electrs", node="a", instance="electrs:4224", method="GET", route="tx/:txid", status="500"}'
+        values: '0+0.4x200'
+    alert_rule_test:
+      - {eval_time: 90m, alertname: ElectrsRESTAvailabilityBurnFast, exp_alerts: []}
+      - {eval_time: 90m, alertname: ElectrsRESTAvailabilityBurnSlow, exp_alerts: []}
+
+  - name: 1 in 6 REST requests slower than 1 s
+    interval: 1m
+    input_series:
+      - series: 'rest_request_duration_seconds_count{job="electrs", node="a", instance="electrs:4224", method="GET", route="address/:address/txs", status="200"}'
+        values: '0+60x200'
+      - series: 'rest_request_duration_seconds_bucket{job="electrs", node="a", instance="electrs:4224", method="GET", route="address/:address/txs", status="200", le="1"}'
+        values: '0+50x200'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ElectrsRESTLatencyBurnFast
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsRESTLatencyBurnFast, severity: critical, node: a, slo: rest-latency}
+            exp_annotations:
+              description: "Objective: 99% of REST requests served within 1 s over 30 days. At the current rate the error budget would be gone within 2 to 5 days."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-rest-latency-slo.md"
+              summary: "electrs rest-latency SLO on a is burning its error budget (fast)"
+      - eval_time: 90m
+        alertname: ElectrsRESTLatencyBurnSlow
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsRESTLatencyBurnSlow, severity: warning, node: a, slo: rest-latency}
+            exp_annotations:
+              description: "Objective: 99% of REST requests served within 1 s over 30 days. At the current rate the error budget would be gone within 10 to 30 days."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-rest-latency-slo.md"
+              summary: "electrs rest-latency SLO on a is burning its error budget (slow)"
+
+  - name: Prometheus 3 normalised le="1.0" is matched too
+    interval: 1m
+    input_series:
+      - series: 'rest_request_duration_seconds_count{job="electrs", node="a", instance="electrs:4224", method="GET", route="address/:address/txs", status="200"}'
+        values: '0+60x200'
+      - series: 'rest_request_duration_seconds_bucket{job="electrs", node="a", instance="electrs:4224", method="GET", route="address/:address/txs", status="200", le="1.0"}'
+        values: '0+60x200'
+    alert_rule_test:
+      - {eval_time: 90m, alertname: ElectrsRESTLatencyBurnFast, exp_alerts: []}
+
+  - name: 1 in 6 Electrum calls slower than 2.5 s
+    interval: 1m
+    input_series:
+      - series: 'electrum_rpc_count{job="electrs", node="a", instance="electrs:4224", method="blockchain.scripthash.get_history"}'
+        values: '0+60x200'
+      - series: 'electrum_rpc_bucket{job="electrs", node="a", instance="electrs:4224", method="blockchain.scripthash.get_history", le="2.5"}'
+        values: '0+50x200'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: ElectrsElectrumLatencyBurnFast
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsElectrumLatencyBurnFast, severity: critical, node: a, slo: electrum-latency}
+            exp_annotations:
+              description: "Objective: 99% of Electrum RPC calls served within 2.5 s over 30 days. At the current rate the error budget would be gone within 2 to 5 days."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-electrum-latency-slo.md"
+              summary: "electrs electrum-latency SLO on a is burning its error budget (fast)"
+      - eval_time: 90m
+        alertname: ElectrsElectrumLatencyBurnSlow
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsElectrumLatencyBurnSlow, severity: warning, node: a, slo: electrum-latency}
+            exp_annotations:
+              description: "Objective: 99% of Electrum RPC calls served within 2.5 s over 30 days. At the current rate the error budget would be gone within 10 to 30 days."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-electrum-latency-slo.md"
+              summary: "electrs electrum-latency SLO on a is burning its error budget (slow)"

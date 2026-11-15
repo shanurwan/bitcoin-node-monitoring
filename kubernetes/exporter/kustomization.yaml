@@ -1,0 +1,13 @@
+# bitcoind exporter for a bitcoind running in the same namespace, plus ServiceMonitors
+# for the exporter and for electrs. Patch the Service selectors, the bitcoind RPC URL,
+# the Secret and the node label for your setup.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+  - servicemonitors.yaml
+configMapGenerator:
+  - name: bitcoind-exporter
+    files:
+      - bitcoind_exporter.py

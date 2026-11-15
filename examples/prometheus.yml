@@ -1,0 +1,28 @@
+# Minimal Prometheus configuration for one bitcoind + electrs pair.
+# The rules expect job="bitcoind", job="electrs" and job="node", and a shared
+# node label on all three so bitcoind and electrs metrics can be joined.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - ../rules/*.yml
+
+scrape_configs:
+  - job_name: bitcoind
+    static_configs:
+      - targets: ["127.0.0.1:9332"]     # exporter/bitcoind_exporter.py
+        labels: {node: mainnet-1}
+
+  - job_name: electrs
+    # electrs serves /metrics without a Content-Type header. Prometheus 3 refuses
+    # such targets unless a fallback protocol is set.
+    fallback_scrape_protocol: PrometheusText0.0.4
+    static_configs:
+      - targets: ["127.0.0.1:4224"]     # electrs --monitoring-addr
+        labels: {node: mainnet-1}
+
+  - job_name: node
+    static_configs:
+      - targets: ["127.0.0.1:9100"]     # node_exporter
+        labels: {node: mainnet-1}

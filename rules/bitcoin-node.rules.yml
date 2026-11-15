@@ -1,0 +1,40 @@
+# Recording rules shared by the alerts and the dashboard.
+#
+# Conventions (see README):
+#   job="bitcoind"  the bitcoind exporter in exporter/
+#   job="electrs"   electrs --monitoring-addr
+#   job="node"      node_exporter on the host that holds the data directories
+#   node="<name>"   set on every target of one bitcoind + electrs pair, so their
+#                   metrics can be joined
+groups:
+  - name: bitcoin-node.rules
+    rules:
+      - record: node:bitcoind_blocks:max
+        expr: max by (node) (bitcoind_blocks{job="bitcoind"})
+
+      - record: node:electrs_tip_height:max
+        expr: max by (node) (tip_height{job="electrs"})
+
+      # Blocks bitcoind has validated that electrs has not indexed yet.
+      # Only meaningful once electrs has finished its initial sync (tip_height > 0).
+      - record: node:electrs_index_lag_blocks
+        expr: node:bitcoind_blocks:max - on (node) (node:electrs_tip_height:max > 0)
+
+      - record: node:bitcoind_tip_age_seconds
+        expr: time() - max by (node) (bitcoind_best_block_timestamp_seconds{job="bitcoind"})
+
+      - record: node:electrs_rocksdb_running_compactions:sum
+        expr: sum by (node) (rocksdb_num_running_compactions{job="electrs"})
+
+      - record: node:electrs_rocksdb_sst_bytes:sum
+        expr: sum by (node) (rocksdb_total_sst_files_size_bytes{job="electrs"})
+
+      - record: node:electrs_rocksdb_table_readers_bytes:sum
+        expr: sum by (node) (rocksdb_estimate_table_readers_mem_bytes{job="electrs"})
+
+      # Memory you allow electrs to use. Peak use is during initial sync and the
+      # one-time full compaction after it, so size this for that, not for steady state.
+      # Edit the number (bytes) to match your host or container limit. To set it per
+      # node, replace vector() with one series per node carrying a node label.
+      - record: bitcoin_node:electrs_memory_budget_bytes
+        expr: vector(64 * 1024 * 1024 * 1024)

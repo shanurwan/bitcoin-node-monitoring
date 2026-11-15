@@ -1,0 +1,23 @@
+# systemd unit for the exporter on the bitcoind host.
+# Install: cp exporter/bitcoind_exporter.py /usr/local/bin/ && cp this file /etc/systemd/system/
+#          systemctl daemon-reload && systemctl enable --now bitcoind-exporter
+[Unit]
+Description=Prometheus exporter for bitcoind
+After=bitcoind.service
+
+[Service]
+User=bitcoin
+Group=bitcoin
+# The cookie is re-read on every scrape, so bitcoind restarts are picked up.
+Environment=BITCOIND_RPC_URL=http://127.0.0.1:8332/
+Environment=BITCOIND_RPC_COOKIE=/var/lib/bitcoind/.cookie
+Environment=EXPORTER_LISTEN=127.0.0.1:9332
+ExecStart=/usr/bin/python3 -I /usr/local/bin/bitcoind_exporter.py
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

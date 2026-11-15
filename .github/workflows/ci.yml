@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  PROMETHEUS_VERSION: "3.15.1"
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generated files are up to date
+        run: |
+          python3 scripts/generate.py
+          git diff --exit-code
+
+      - name: Install promtool
+        run: |
+          curl -sSLO "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/sha256sums.txt" \
+            | grep "prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" | sha256sum -c -
+          tar xzf "prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          echo "$PWD/prometheus-${PROMETHEUS_VERSION}.linux-amd64" >> "$GITHUB_PATH"
+
+      - name: Check rules
+        run: promtool check rules rules/*.yml
+
+      - name: Unit-test alerts
+        run: promtool test rules tests/alerts.test.yml
+
+      - name: Check example Prometheus config
+        run: promtool check config --syntax-only examples/prometheus.yml
+
+      - name: Lint dashboard
+        run: python3 scripts/lint_dashboard.py
+
+      - name: Exporter compiles and renders metrics without a node
+        run: |
+          python3 -m py_compile exporter/bitcoind_exporter.py scripts/*.py
+          BITCOIND_RPC_URL=http://127.0.0.1:1/ BITCOIND_RPC_USER=x BITCOIND_RPC_PASSWORD=x \
+            python3 -c "import importlib.util as u; s=u.spec_from_file_location('e','exporter/bitcoind_exporter.py'); m=u.module_from_spec(s); s.loader.exec_module(m); print(m.collect().decode())" \
+            | tee /tmp/metrics.txt
+          grep -q '^bitcoind_up 0.0$' /tmp/metrics.txt
+          promtool check metrics < /tmp/metrics.txt
+
+      - name: Build Kustomize bases
+        run: |
+          kubectl kustomize kubernetes/base > /dev/null
+          kubectl kustomize kubernetes/exporter > /dev/null
