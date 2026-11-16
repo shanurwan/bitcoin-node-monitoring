@@ -11,32 +11,28 @@ electrs stays at the height before the reorg; ElectrsIndexBehind follows.
 
 ## Triage
 
-1. electrs log around the reorg: the error from the cleanup and its retries.
+1. electrs log around the reorg: the error from the cleanup and its retries. Retries back off, and run again at
+   once when the tip changes.
 2. `bitcoin-cli getchaintips` to see the reorg depth.
 3. Disk space and RocksDB errors.
 
 ## Likely causes
 
-- A reorg deeper than expected, or blocks bitcoind no longer has (pruned bitcoind).
+- A stale block that bitcoind never downloaded or no longer serves: electrs needs the stale block's transactions to
+  remove their history. (A pruned bitcoind is not the cause: electrs refuses to start against one.)
+- A reorg deeper than expected.
 - RocksDB write errors (disk full, background errors).
 
 ## Mitigation
 
-Fix disk or RocksDB problems; electrs retries the cleanup on every loop. If bitcoind is pruned below the reorg point, electrs may need a resync.
+Fix disk or RocksDB problems. electrs retries the cleanup with a backoff, and immediately when a new block arrives,
+so it clears by itself once the cause is gone. If bitcoind cannot provide the stale block, electrs may need a
+resync.
 
 ## Escalate when
 
 Immediately if it does not clear within 30 minutes: this may need a resync, which takes hours.
 
-## Handoff note
+## Handoff
 
-Copy this into the incident channel or ticket when you hand over:
-
-```text
-Alert:      ElectrsStaleCleanupFailing on <node>, firing since <UTC time>
-Impact:     <who is affected and how; "none yet" is a valid answer>
-Checked:    <what you looked at and what it showed>
-Done:       <actions taken, with times>
-State now:  <current heights / error rates / memory, from the dashboard>
-Next:       <what the next person should do or watch, and when to escalate>
-```
+Use the [handoff note](README.md#handoff-note).

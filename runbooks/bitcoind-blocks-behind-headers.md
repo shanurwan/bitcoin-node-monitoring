@@ -29,15 +29,6 @@ Give bitcoind I/O headroom (stop competing jobs, raise `-dbcache` if memory allo
 
 The gap keeps growing for an hour, or a block is marked invalid.
 
-## Handoff note
+## Handoff
 
-Copy this into the incident channel or ticket when you hand over:
-
-```text
-Alert:      BitcoindBlocksBehindHeaders on <node>, firing since <UTC time>
-Impact:     <who is affected and how; "none yet" is a valid answer>
-Checked:    <what you looked at and what it showed>
-Done:       <actions taken, with times>
-State now:  <current heights / error rates / memory, from the dashboard>
-Next:       <what the next person should do or watch, and when to escalate>
-```
+Use the [handoff note](README.md#handoff-note).

@@ -1,9 +1,12 @@
 # ElectrsMemoryHigh
 
-**Alerts:** `ElectrsMemoryHigh`  
+**Alerts:** `ElectrsMemoryHigh`, `ElectrsContainerMemoryHigh`  
 **Severity:** warning
 
-electrs's resident memory has been above 85% of `bitcoin_node:electrs_memory_budget_bytes` for 10 minutes.
+`ElectrsMemoryHigh`: electrs's resident memory has been above 85% of `bitcoin_node:electrs_memory_budget_bytes` for
+10 minutes (hosts). `ElectrsContainerMemoryHigh`: the electrs container's working set has been above 85% of its
+memory limit for 10 minutes (Kubernetes). The working set includes page cache that RocksDB keeps hot, and it is what
+the OOM killer compares with the limit.
 
 ## Impact
 
@@ -20,7 +23,8 @@ Measured on testnet4 (Bitcoin Core 32.1, about 161,000 blocks, default electrs s
 - Peak RSS was 5.8 GiB, during indexing, not during compaction (about 4.1 GiB while compacting).
 - RocksDB table-reader memory was 0.4 GiB at 16 GB of SST files and grows with the database, unless `--cache-index-filter-blocks` is set.
 - Most of the RSS was not covered by RocksDB's own gauges.
-Mainnet needs far more; electrs maintainers report using machines with at least 64 GB for mainnet initial sync and compaction.
+Mainnet needs far more: an electrs maintainer [reports](https://github.com/Blockstream/electrs/issues/215#issuecomment-4508569410) using machines with at least 64 GB for the mainnet
+initial sync and compaction.
 
 ## Mitigation
 
@@ -32,15 +36,6 @@ Mainnet needs far more; electrs maintainers report using machines with at least 
 
 Memory keeps growing in steady state (after the initial sync and compaction), which suggests a leak.
 
-## Handoff note
+## Handoff
 
-Copy this into the incident channel or ticket when you hand over:
-
-```text
-Alert:      ElectrsMemoryHigh on <node>, firing since <UTC time>
-Impact:     <who is affected and how; "none yet" is a valid answer>
-Checked:    <what you looked at and what it showed>
-Done:       <actions taken, with times>
-State now:  <current heights / error rates / memory, from the dashboard>
-Next:       <what the next person should do or watch, and when to escalate>
-```
+Use the [handoff note](README.md#handoff-note).

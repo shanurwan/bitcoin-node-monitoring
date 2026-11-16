@@ -18,9 +18,14 @@ The node stays unusable. On mainnet an initial sync already takes many hours, so
 ## Likely causes
 
 - Waiting on bitcoind RPC (bitcoind restarting or overloaded).
-- With `--blocks-dir`: the file pass finished and electrs is fetching the remaining blocks over RPC. If idle RPC sockets were closed during a long file pass, you see `reconnecting to bitcoind: ... disconnected from daemon while receiving` warnings; electrs reconnects and carries on.
+- With `--blocks-dir`: the file pass finished and electrs is fetching the remaining blocks over RPC. If idle RPC
+  sockets were closed during a long file pass, you see `reconnecting to bitcoind: ... disconnected from daemon while
+  receiving` warnings; electrs reconnects and carries on.
 - Memory pressure: the cgroup throttles at its memory.high limit instead of killing the process, and progress crawls.
-- Note: `initial_sync_progress_pct` is the height of the last batch, not overall progress. With `--blocks-dir` it can end well below 100 because the RPC fallback indexes low heights last; the alert does not rely on it.
+- Note: `initial_sync_progress_pct` is derived from the height of the last batch, not from overall progress, so the
+  alert does not rely on it. With the change in Blockstream/electrs#268 (not merged at the time of writing),
+  `--blocks-dir` defers blocks whose inputs are in later blk files and indexes them over RPC at the end, so the
+  gauge can finish below 100.
 
 ## Mitigation
 
@@ -30,15 +35,6 @@ Fix RPC or memory pressure. Restarting is safe (indexing resumes from what is al
 
 No progress for 2 hours with bitcoind healthy and no memory pressure.
 
-## Handoff note
+## Handoff
 
-Copy this into the incident channel or ticket when you hand over:
-
-```text
-Alert:      ElectrsInitialSyncStalled on <node>, firing since <UTC time>
-Impact:     <who is affected and how; "none yet" is a valid answer>
-Checked:    <what you looked at and what it showed>
-Done:       <actions taken, with times>
-State now:  <current heights / error rates / memory, from the dashboard>
-Next:       <what the next person should do or watch, and when to escalate>
-```
+Use the [handoff note](README.md#handoff-note).

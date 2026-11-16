@@ -191,7 +191,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "From the block header timestamp, which can be off by up to 2 h.",
+      "description": "Time since this node got its best block, as seen by the exporter. Header timestamps are not used: miners can set them up to 2 h ahead.",
       "fieldConfig": {
         "defaults": {
           "thresholds": {
@@ -446,7 +446,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Height of the last block batch indexed. With --blocks-dir the RPC fallback indexes deferred low-height blocks last, so this can end below the tip.",
+      "description": "Height of the last block batch indexed during the initial sync. tip_height stays 0 until the sync and its full compaction finish.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -801,7 +801,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "",
+      "description": "warmup is 1 while bitcoind answers RPC with 'in warmup' (-28): loading the block index, verifying blocks or replaying after an unclean shutdown.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -842,9 +842,18 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
+          "expr": "bitcoind_rpc_warmup{node=~\"$node\"}",
+          "legendFormat": "{{node}} warmup",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "bitcoind_rpc_active_commands{node=~\"$node\"}",
           "legendFormat": "{{node}} active RPC",
-          "refId": "A"
+          "refId": "B"
         },
         {
           "datasource": {
@@ -853,10 +862,10 @@
           },
           "expr": "bitcoind_exporter_scrape_duration_seconds{node=~\"$node\"}",
           "legendFormat": "{{node}} scrape seconds",
-          "refId": "B"
+          "refId": "C"
         }
       ],
-      "title": "RPC: active commands and exporter scrape time",
+      "title": "RPC: warmup, active commands and exporter scrape time",
       "type": "timeseries"
     },
     {
@@ -1362,7 +1371,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Table-reader memory grows with the database unless --cache-index-filter-blocks is set.",
+      "description": "Table-reader memory grows with the database unless --cache-index-filter-blocks is set. ElectrsMemoryHigh compares RSS with bitcoin_node:electrs_memory_budget_bytes.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -1412,18 +1421,9 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "bitcoin_node:electrs_memory_budget_bytes",
-          "legendFormat": "budget",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
           "expr": "node:electrs_rocksdb_table_readers_bytes:sum{node=~\"$node\"}",
           "legendFormat": "{{node}} RocksDB table readers",
-          "refId": "C"
+          "refId": "B"
         },
         {
           "datasource": {
@@ -1432,7 +1432,7 @@
           },
           "expr": "sum by (node) (rocksdb_cur_size_all_mem_tables_bytes{job=\"electrs\", node=~\"$node\"})",
           "legendFormat": "{{node}} memtables",
-          "refId": "D"
+          "refId": "C"
         },
         {
           "datasource": {
@@ -1441,7 +1441,7 @@
           },
           "expr": "sum by (node) (rocksdb_block_cache_usage_bytes{job=\"electrs\", node=~\"$node\"})",
           "legendFormat": "{{node}} block cache",
-          "refId": "E"
+          "refId": "D"
         }
       ],
       "title": "electrs memory",
@@ -1619,14 +1619,122 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Level-0 files pile up when compaction falls behind; RocksDB delays and then stops writes as the count grows.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 90
+      },
+      "id": 33,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (db) (rocksdb_num_files_at_level{job=\"electrs\", level=\"0\", node=~\"$node\"})",
+          "legendFormat": "{{db}}",
+          "refId": "A"
+        }
+      ],
+      "title": "RocksDB L0 files",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Non-zero while RocksDB throttles writes (ElectrsRocksDBWriteDelayed).",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 90
+      },
+      "id": 34,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (db) (rocksdb_actual_delayed_write_rate{job=\"electrs\", node=~\"$node\"})",
+          "legendFormat": "{{db}}",
+          "refId": "A"
+        }
+      ],
+      "title": "RocksDB delayed write rate",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 90
+        "y": 98
       },
-      "id": 33,
+      "id": 35,
       "panels": [],
       "title": "Host",
       "type": "row"
@@ -1657,9 +1765,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 91
+        "y": 99
       },
-      "id": 34,
+      "id": 36,
       "options": {
         "legend": {
           "displayMode": "list",
@@ -1711,9 +1819,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 91
+        "y": 99
       },
-      "id": 35,
+      "id": 37,
       "options": {
         "legend": {
           "displayMode": "list",

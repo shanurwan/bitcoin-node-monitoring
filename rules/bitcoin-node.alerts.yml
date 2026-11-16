@@ -1,18 +1,41 @@
 # Alerts for one or more bitcoind + electrs pairs. Severity "critical" is meant to
 # page; "warning" is meant for a ticket or a chat channel during working hours.
 # Every alert links to a runbook in runbooks/.
+#
+# A target that disappears (pod Pending, StatefulSet scaled to 0, a ServiceMonitor
+# that no longer matches) has no up series at all, so up == 0 never fires for it.
+# The Down alerts therefore also fire when a job has no targets, or when one half
+# of a bitcoind + electrs pair is scraped and the other is missing.
 groups:
   - name: bitcoind.alerts
     rules:
       - alert: BitcoindDown
-        expr: (bitcoind_up{job="bitcoind"} == 0) or (up{job="bitcoind"} == 0)
+        # Warmup (RPC error -28) has its own alert below with a longer for:.
+        expr: |
+          (bitcoind_up{job="bitcoind"} == 0 unless on (instance) bitcoind_rpc_warmup{job="bitcoind"} == 1)
+            or up{job="bitcoind"} == 0
+            or absent(up{job="bitcoind"})
+            or (group by (node) (up{job="electrs"}) unless on (node) group by (node) (up{job="bitcoind"}))
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "bitcoind on {{ $labels.node }} is not answering RPC"
-          description: "The exporter at {{ $labels.instance }} cannot reach bitcoind's JSON-RPC (or the exporter itself is down) for 5 minutes. electrs on this node cannot index new blocks or relay transactions."
+          summary: 'bitcoind on {{ or $labels.node "every node" }} is not answering RPC'
+          description: "For 5 minutes bitcoind's JSON-RPC has not answered, or its exporter is not scraped or has no target at all. electrs on this node cannot index new blocks or relay transactions."
           runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-down.md
+
+      - alert: BitcoindWarmupTooLong
+        # Loading the block index and verifying the last blocks takes minutes. Replaying
+        # blocks after an unclean shutdown can take much longer; the node serves nothing
+        # meanwhile, and electrs waits on it (see ElectrsMainLoopStalled).
+        expr: bitcoind_rpc_warmup{job="bitcoind"} == 1
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "bitcoind on {{ $labels.node }} has been starting up for 30 minutes"
+          description: "bitcoind has answered every RPC call with 'in warmup' (error -28) for 30 minutes: it is still loading the block index, verifying blocks or replaying blocks after an unclean shutdown."
+          runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-down.md#still-warming-up
 
       - alert: BitcoindNoPeers
         expr: sum by (node) (bitcoind_peers{job="bitcoind"}) == 0
@@ -35,17 +58,36 @@ groups:
           runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-low-outbound-peers.md
 
       - alert: BitcoindNoNewBlocks
-        # Mainnet: the chance of no block in 90 minutes is about e^-9 (1 in 8,000).
+        # Mainnet: no block for 95 minutes has probability e^-9.5 (about 1 in 13,000)
+        # per block interval, which happens about 4 times a year, on every node at once.
+        # So this is a warning; BitcoindBehindFleet is the page.
         # Block timestamps can be off by up to two hours, so this uses the height.
         # "x - x offset 90m" returns nothing until there is a sample from 90 minutes ago,
         # so a Prometheus restart or a new target does not fire it (changes() would).
         expr: (bitcoind_blocks{job="bitcoind"} - bitcoind_blocks{job="bitcoind"} offset 90m) == 0 and bitcoind_initial_block_download{job="bitcoind"} == 0
         for: 5m
         labels:
-          severity: critical
+          severity: warning
         annotations:
           summary: "bitcoind on {{ $labels.node }} has not seen a new block for 95 minutes"
           description: "bitcoind's height has not changed for 95 minutes. Either the node is stuck or partitioned, or the network really is slow; compare with another source before acting."
+          runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-no-new-blocks.md
+
+      - alert: BitcoindBehindFleet
+        # Needs two or more nodes. A slow network moves every node together; a stuck or
+        # partitioned node falls behind the others.
+        expr: |
+          (
+            max by (node) (bitcoind_blocks{job="bitcoind"})
+              < on () group_left () (max (bitcoind_blocks{job="bitcoind"}) - 2)
+          )
+          unless on (node) max by (node) (bitcoind_initial_block_download{job="bitcoind"}) == 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "bitcoind on {{ $labels.node }} is behind the other nodes"
+          description: "bitcoind on {{ $labels.node }} has been more than 2 blocks behind the highest node for 10 minutes. The other nodes see new blocks, so this one is stuck or cut off."
           runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-no-new-blocks.md
 
       - alert: BitcoindBlocksBehindHeaders
@@ -71,6 +113,7 @@ groups:
       - alert: BitcoindRestartLoop
         expr: resets(bitcoind_uptime_seconds{job="bitcoind"}[1h]) >= 3
         for: 0m
+        keep_firing_for: 10m
         labels:
           severity: warning
         annotations:
@@ -91,13 +134,16 @@ groups:
   - name: electrs.alerts
     rules:
       - alert: ElectrsDown
-        expr: up{job="electrs"} == 0
+        expr: |
+          up{job="electrs"} == 0
+            or absent(up{job="electrs"})
+            or (group by (node) (up{job="bitcoind"}) unless on (node) group by (node) (up{job="electrs"}))
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "electrs on {{ $labels.node }} is down"
-          description: "Prometheus cannot scrape electrs at {{ $labels.instance }} for 5 minutes. The monitoring endpoint starts before indexing, so this means the process is not running or is not reachable."
+          summary: 'electrs on {{ or $labels.node "every node" }} is down'
+          description: "For 5 minutes Prometheus has not scraped electrs, or has no electrs target at all. The monitoring endpoint starts before indexing, so this means the process is not running, not reachable, or not scheduled."
           runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-down.md
 
       - alert: ElectrsIndexBehind
@@ -128,7 +174,11 @@ groups:
 
       - alert: ElectrsMainLoopStalled
         # electrs_main_loop_count exists only after startup and goes up every 5 s.
-        expr: (electrs_main_loop_count{job="electrs"} - electrs_main_loop_count{job="electrs"} offset 10m) == 0
+        # electrs retries forever while bitcoind is unreachable or warming up, which
+        # stops the loop; BitcoindDown or BitcoindWarmupTooLong cover that case.
+        expr: |
+          (electrs_main_loop_count{job="electrs"} - electrs_main_loop_count{job="electrs"} offset 10m) == 0
+            unless on (node) max by (node) (bitcoind_up{job="bitcoind"}) == 0
         for: 5m
         labels:
           severity: critical
@@ -157,9 +207,23 @@ groups:
           description: "RocksDB has stopped writes to {{ $labels.db }} for 5 minutes, usually because compaction cannot keep up or the disk is full."
           runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-rocksdb-write-stopped.md
 
+      - alert: ElectrsRocksDBWriteDelayed
+        # RocksDB slows writes before it stops them. Not checked during the initial sync.
+        expr: |
+          max by (node, db) (rocksdb_actual_delayed_write_rate{job="electrs"}) > 0
+            and on (node) node:electrs_tip_height:max > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RocksDB {{ $labels.db }} writes are being delayed on {{ $labels.node }}"
+          description: "RocksDB has throttled writes to {{ $labels.db }} for 15 minutes because compaction is falling behind. If it continues, writes stop (ElectrsRocksDBWriteStopped)."
+          runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-rocksdb-write-stopped.md
+
       - alert: ElectrsRocksDBBackgroundErrors
         expr: increase(rocksdb_background_errors_total{job="electrs"}[15m]) > 0
         for: 0m
+        keep_firing_for: 10m
         labels:
           severity: critical
         annotations:
@@ -168,16 +232,22 @@ groups:
           runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-rocksdb-background-errors.md
 
       - alert: ElectrsBitcoindRPCErrors
+        # daemon_rpc_proxied{result="error"} is left out on purpose: it counts bitcoind
+        # rejecting a client's transaction (invalid, double spend, fee too low), which is
+        # normal traffic on a public Esplora.
         expr: |
-          sum by (node) (increase(daemon_rpc_conn_handshake{job="electrs", result=~"rejected|timeout|error"}[15m])) > 3
-            or
-          sum by (node) (increase(daemon_rpc_proxied{job="electrs", result=~"busy|unavailable|error"}[15m])) > 10
+          (
+            sum by (node) (increase(daemon_rpc_conn_handshake{job="electrs", result=~"rejected|timeout|error"}[15m])) > 3
+              or
+            sum by (node) (increase(daemon_rpc_proxied{job="electrs", result=~"busy|unavailable"}[15m])) > 10
+          )
+          unless on (node) max by (node) (bitcoind_up{job="bitcoind"}) == 0
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "electrs on {{ $labels.node }} is failing to talk to bitcoind"
-          description: "electrs's RPC connections to bitcoind are being rejected or timing out, or proxied RPC calls are failing. A common cause is bitcoind's -rpcmaxconnections or -rpcthreads limit."
+          description: "electrs's RPC connections to bitcoind are being refused, rejected or not answered, or proxied client calls find no free slot or no answer. Common causes are bitcoind's -rpcmaxconnections and -rpcthreads limits and electrs's --daemon-parallelism."
           runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-bitcoind-rpc-errors.md
 
       - alert: ElectrsBitcoindRPCSlow
@@ -196,6 +266,7 @@ groups:
       - alert: ElectrsMempoolSyncFailing
         expr: increase(mempool_sync_failed_to_index{job="electrs"}[30m]) > 2
         for: 0m
+        keep_firing_for: 10m
         labels:
           severity: warning
         annotations:
@@ -204,8 +275,16 @@ groups:
           runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-mempool-sync-failing.md
 
       - alert: ElectrsElectrumFdLimit
-        expr: increase(electrum_connection_errors_total{job="electrs", reason="fd_limit"}[10m]) > 0
+        # electrs creates the fd_limit series on the first refusal, and increase() cannot
+        # see the step from "no series" to 1. The second half catches a series that did not
+        # exist 10 minutes ago. After a Prometheus restart it can fire once for refusals
+        # earlier in electrs's lifetime.
+        expr: |
+          increase(electrum_connection_errors_total{job="electrs", reason="fd_limit"}[10m]) > 0
+            or (electrum_connection_errors_total{job="electrs", reason="fd_limit"} > 0
+                unless electrum_connection_errors_total{job="electrs", reason="fd_limit"} offset 10m)
         for: 0m
+        keep_firing_for: 10m
         labels:
           severity: warning
         annotations:
@@ -216,6 +295,7 @@ groups:
       - alert: ElectrsRestartLoop
         expr: resets(process_cpu_usage{job="electrs", type="utime"}[1h]) >= 3
         for: 0m
+        keep_firing_for: 10m
         labels:
           severity: warning
         annotations:
@@ -231,6 +311,21 @@ groups:
         annotations:
           summary: "electrs on {{ $labels.node }} uses {{ $value | humanize1024 }}B, over 85% of its memory budget"
           description: "electrs's resident memory has been above 85% of bitcoin_node:electrs_memory_budget_bytes for 10 minutes. Initial sync and the full compaction after it are the peaks; an OOM kill there restarts a long job."
+          runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-memory-high.md
+
+      - alert: ElectrsContainerMemoryHigh
+        # Kubernetes: the working set against the container limit, which is what the OOM
+        # killer acts on. Assumes the container is named electrs.
+        expr: |
+          max by (namespace, pod) (container_memory_working_set_bytes{container="electrs"})
+            / max by (namespace, pod) (kube_pod_container_resource_limits{container="electrs", resource="memory"})
+            > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "electrs in {{ $labels.namespace }}/{{ $labels.pod }} uses {{ $value | humanizePercentage }} of its memory limit"
+          description: "The electrs container's working set has been above 85% of its memory limit for 10 minutes. Initial sync and the full compaction after it are the peaks; an OOM kill there restarts a long job."
           runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-memory-high.md
 
   - name: bitcoin-node-host.alerts
@@ -256,4 +351,32 @@ groups:
         annotations:
           summary: "{{ $labels.mountpoint }} on {{ $labels.node }} is {{ $value | humanizePercentage }} free"
           description: "Less than 5% of {{ $labels.mountpoint }} is free. bitcoind shuts down when it cannot write, and RocksDB stops writes."
+          runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoin-node-disk.md
+
+  - name: bitcoin-node-volumes.alerts
+    rules:
+      # Kubernetes: the disk alerts again, from kubelet volume stats, for
+      # PersistentVolumeClaims whose name contains bitcoin or electrs. Change the regex
+      # to match your claims.
+      - alert: BitcoinNodeVolumeWillFill
+        expr: |
+          predict_linear(kubelet_volume_stats_available_bytes{persistentvolumeclaim=~".*(bitcoin|electrs).*"}[6h], 48 * 3600) < 0
+            and (kubelet_volume_stats_available_bytes{persistentvolumeclaim=~".*(bitcoin|electrs).*"} / kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~".*(bitcoin|electrs).*"}) < 0.25
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Volume {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} will fill within 48 hours"
+          description: "At the growth rate of the last 6 hours, {{ $labels.persistentvolumeclaim }} runs out of space within 48 hours, and it is already more than 75% full."
+          runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoin-node-disk.md
+
+      - alert: BitcoinNodeVolumeAlmostFull
+        expr: |
+          (kubelet_volume_stats_available_bytes{persistentvolumeclaim=~".*(bitcoin|electrs).*"} / kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~".*(bitcoin|electrs).*"}) < 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Volume {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} free"
+          description: "Less than 5% of {{ $labels.persistentvolumeclaim }} is free. bitcoind shuts down when it cannot write, and RocksDB stops writes."
           runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoin-node-disk.md

@@ -1,9 +1,11 @@
 # ElectrsRocksDBWriteStopped
 
-**Alerts:** `ElectrsRocksDBWriteStopped`  
-**Severity:** critical
+**Alerts:** `ElectrsRocksDBWriteStopped` (critical), `ElectrsRocksDBWriteDelayed` (warning)  
+**Severity:** critical / warning
 
-RocksDB has stopped writes to one of electrs's databases (txstore, history or cache) for 5 minutes.
+RocksDB has stopped writes to one of electrs's databases (txstore, history or cache) for 5 minutes, or, after the
+initial sync, has throttled them (`rocksdb_actual_delayed_write_rate` > 0) for 15 minutes. Delays come first; a stop
+follows if compaction keeps falling behind.
 
 ## Impact
 
@@ -12,7 +14,8 @@ Indexing and anything that writes to that database block.
 ## Triage
 
 1. Disk space on the electrs data directory.
-2. Dashboard: pending compaction bytes and L0 file counts for that database.
+2. Dashboard: the "RocksDB L0 files", "RocksDB compaction" (pending bytes) and "RocksDB delayed write rate" panels
+   for that database.
 3. electrs log for RocksDB messages.
 
 ## Likely causes
@@ -29,15 +32,6 @@ Free disk space, or give compaction I/O (move to faster storage, raise `--db-par
 
 It does not clear within 30 minutes with disk space available.
 
-## Handoff note
+## Handoff
 
-Copy this into the incident channel or ticket when you hand over:
-
-```text
-Alert:      ElectrsRocksDBWriteStopped on <node>, firing since <UTC time>
-Impact:     <who is affected and how; "none yet" is a valid answer>
-Checked:    <what you looked at and what it showed>
-Done:       <actions taken, with times>
-State now:  <current heights / error rates / memory, from the dashboard>
-Next:       <what the next person should do or watch, and when to escalate>
-```
+Use the [handoff note](README.md#handoff-note).

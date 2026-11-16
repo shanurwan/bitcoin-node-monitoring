@@ -12,7 +12,7 @@ The node does not receive new blocks or transactions, so electrs serves an incre
 ## Triage
 
 1. `bitcoin-cli getnetworkinfo` – check `networkactive` and `connections`.
-2. `bitcoin-cli getpeerinfo | grep -c addr` and the end of `debug.log` for connection errors.
+2. `bitcoin-cli getconnectioncount` and the end of `debug.log` for connection errors.
 3. From the host: can it reach the internet on the P2P port (8333 mainnet, 48333 testnet4)? Check firewalls, NetworkPolicies, egress NAT and DNS seeds.
 
 ## Likely causes
@@ -31,15 +31,6 @@ The node does not receive new blocks or transactions, so electrs serves an incre
 
 No peers after the network path is confirmed open, or several nodes lose peers at once (a provider or regional issue).
 
-## Handoff note
+## Handoff
 
-Copy this into the incident channel or ticket when you hand over:
-
-```text
-Alert:      BitcoindNoPeers on <node>, firing since <UTC time>
-Impact:     <who is affected and how; "none yet" is a valid answer>
-Checked:    <what you looked at and what it showed>
-Done:       <actions taken, with times>
-State now:  <current heights / error rates / memory, from the dashboard>
-Next:       <what the next person should do or watch, and when to escalate>
-```
+Use the [handoff note](README.md#handoff-note).

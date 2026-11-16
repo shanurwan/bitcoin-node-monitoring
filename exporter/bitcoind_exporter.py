@@ -8,14 +8,18 @@ Configuration (environment variables):
   BITCOIND_RPC_URL       default http://127.0.0.1:8332/
   BITCOIND_RPC_COOKIE    path to bitcoind's .cookie file (preferred), or
   BITCOIND_RPC_USER / BITCOIND_RPC_PASSWORD
-  BITCOIND_RPC_TIMEOUT   seconds, default 10
+  BITCOIND_RPC_TIMEOUT   seconds, default 5 (keep it below the Prometheus scrape timeout)
   EXPORTER_LISTEN        host:port, default 127.0.0.1:9332
+
+The exporter only needs read-only calls. Give it its own RPC user, limited with
+  -rpcauth=<exporter>:<hash> -rpcwhitelist=<exporter>:getblockchaininfo,getnetworkinfo,getmempoolinfo,getrpcinfo,uptime,getchaintips
 """
 
 import base64
 import json
 import os
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -25,7 +29,7 @@ RPC_URL = os.environ.get("BITCOIND_RPC_URL", "http://127.0.0.1:8332/")
 RPC_COOKIE = os.environ.get("BITCOIND_RPC_COOKIE")
 RPC_USER = os.environ.get("BITCOIND_RPC_USER")
 RPC_PASSWORD = os.environ.get("BITCOIND_RPC_PASSWORD")
-RPC_TIMEOUT = float(os.environ.get("BITCOIND_RPC_TIMEOUT", "10"))
+RPC_TIMEOUT = float(os.environ.get("BITCOIND_RPC_TIMEOUT", "5"))
 LISTEN = os.environ.get("EXPORTER_LISTEN", "127.0.0.1:9332")
 
 # Methods fetched on every scrape, in one JSON-RPC batch.
@@ -39,6 +43,20 @@ METHODS = [
 ]
 
 RPC_ERRORS = {m: 0 for m in METHODS + ["batch"]}
+
+# JSON-RPC error code bitcoind returns while it loads the block index, verifies
+# blocks or replays after an unclean shutdown (RPC_IN_WARMUP).
+RPC_IN_WARMUP = -28
+
+# Best block hash -> Unix time this exporter first saw it as the tip. Block header
+# timestamps can be up to two hours in the future (testnet4 miners routinely set
+# them ahead), so the age of the tip is measured from when the node had it.
+TIP_SEEN = {"hash": None, "time": 0.0}
+TIP_LOCK = threading.Lock()  # scrapes run on concurrent threads
+
+
+class RPCError(Exception):
+    pass
 
 
 def _auth_header():
@@ -64,14 +82,34 @@ def rpc_batch(methods):
     )
     with urllib.request.urlopen(req, timeout=RPC_TIMEOUT) as resp:
         replies = json.load(resp)
-    out = {}
+    if not isinstance(replies, list):
+        raise RPCError("unexpected reply to a batch request: %r" % (replies,))
+    out, errors = {}, {}
     for r in replies:
-        method = methods[r["id"]]
+        rid = r.get("id") if isinstance(r, dict) else None
+        if not isinstance(rid, int) or not 0 <= rid < len(methods):
+            raise RPCError("unexpected reply in batch: %r" % (r,))
+        method = methods[rid]
         if r.get("error"):
             RPC_ERRORS[method] += 1
+            errors[method] = r["error"]
         else:
-            out[method] = r["result"]
-    return out
+            out[method] = r.get("result")
+    return out, errors
+
+
+def tip_seen_time(best_hash, header_time, now):
+    """When this exporter first saw best_hash as the tip.
+
+    On the first scrape after the exporter starts it cannot know, so it takes the
+    earlier of now and the header time.
+    """
+    with TIP_LOCK:
+        if best_hash != TIP_SEEN["hash"]:
+            first = TIP_SEEN["hash"] is None
+            TIP_SEEN["hash"] = best_hash
+            TIP_SEEN["time"] = min(now, header_time) if first and header_time else now
+        return TIP_SEEN["time"]
 
 
 def _esc(v):
@@ -100,18 +138,24 @@ class Metrics:
 def collect():
     m = Metrics()
     start = time.monotonic()
+    errors = {}
     try:
-        r = rpc_batch(METHODS)
-        up = 1
-    except (urllib.error.URLError, OSError, ValueError, RuntimeError) as e:
+        r, errors = rpc_batch(METHODS)
+    except (urllib.error.URLError, OSError, ValueError, RuntimeError, RPCError) as e:
         RPC_ERRORS["batch"] += 1
         print("bitcoind RPC failed: %s" % e, file=sys.stderr)
         r = {}
-        up = 0
 
-    m.add("bitcoind_up", "gauge", "1 if the last JSON-RPC batch to bitcoind succeeded", up)
-
+    # During warmup bitcoind answers the batch with HTTP 200 and error -28 for every
+    # call, so a successful HTTP request alone does not mean the node is usable.
     bci = r.get("getblockchaininfo")
+    if not isinstance(bci, dict):
+        bci = None
+    warmup = any(isinstance(e, dict) and e.get("code") == RPC_IN_WARMUP for e in errors.values())
+    m.add("bitcoind_up", "gauge", "1 if bitcoind answered getblockchaininfo on the last scrape", 1 if bci else 0)
+    m.add("bitcoind_rpc_warmup", "gauge", "1 if bitcoind answered RPC with 'in warmup' (-28) on the last scrape",
+          1 if warmup else 0)
+
     if bci:
         m.add("bitcoind_blocks", "gauge", "Height of the most-work fully validated chain", bci["blocks"])
         m.add("bitcoind_headers", "gauge", "Height of the most-work header chain", bci["headers"])
@@ -121,6 +165,10 @@ def collect():
               bci.get("verificationprogress", 0))
         if "time" in bci:
             m.add("bitcoind_best_block_timestamp_seconds", "gauge", "Header timestamp of the best block", bci["time"])
+        if bci.get("bestblockhash"):
+            m.add("bitcoind_best_block_seen_timestamp_seconds", "gauge",
+                  "Unix time the exporter first saw the current best block", tip_seen_time(
+                      bci["bestblockhash"], bci.get("time", 0), time.time()))
         if "mediantime" in bci:
             m.add("bitcoind_best_block_median_time_seconds", "gauge", "Median time past of the best block",
                   bci["mediantime"])
@@ -133,6 +181,8 @@ def collect():
         m.add("bitcoind_warnings", "gauge", "Number of node warnings reported by getblockchaininfo", len(warnings))
 
     net = r.get("getnetworkinfo")
+    if not isinstance(net, dict):
+        net = None
     if net:
         if "connections_in" in net:
             m.add("bitcoind_peers", "gauge", "Connected peers by direction", net["connections_in"], {"direction": "in"})
@@ -148,7 +198,7 @@ def collect():
         })
 
     mp = r.get("getmempoolinfo")
-    if mp:
+    if isinstance(mp, dict):
         m.add("bitcoind_mempool_transactions", "gauge", "Transactions in the mempool", mp.get("size", 0))
         m.add("bitcoind_mempool_usage_bytes", "gauge", "Memory used by the mempool", mp.get("usage", 0))
         m.add("bitcoind_mempool_max_bytes", "gauge", "Configured mempool memory limit", mp.get("maxmempool", 0))
@@ -158,16 +208,16 @@ def collect():
               1 if mp.get("loaded") else 0)
 
     rpcinfo = r.get("getrpcinfo")
-    if rpcinfo:
+    if isinstance(rpcinfo, dict):
         # Includes the getrpcinfo call itself.
         m.add("bitcoind_rpc_active_commands", "gauge", "RPC commands executing at scrape time",
               len(rpcinfo.get("active_commands", [])))
 
-    if "uptime" in r:
+    if isinstance(r.get("uptime"), (int, float)):
         m.add("bitcoind_uptime_seconds", "gauge", "Seconds since bitcoind started", r["uptime"])
 
     tips = r.get("getchaintips")
-    if tips is not None:
+    if isinstance(tips, list):
         counts = {}
         for t in tips:
             counts[t.get("status", "unknown")] = counts.get(t.get("status", "unknown"), 0) + 1
@@ -192,7 +242,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        body = collect()
+        try:
+            body = collect()
+        except Exception as e:  # never reset the scrape connection; report bitcoind as down
+            print("collect failed: %r" % (e,), file=sys.stderr)
+            body = Metrics()
+            body.add("bitcoind_up", "gauge", "1 if bitcoind answered getblockchaininfo on the last scrape", 0)
+            body = body.render()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))

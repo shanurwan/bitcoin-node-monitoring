@@ -26,7 +26,8 @@ OWN_GROUPS = ("bitcoin-node", "bitcoind", "electrs")
 NOT_METRICS = {
     "by", "without", "on", "ignoring", "group_left", "group_right", "and", "or", "unless", "offset", "bool",
     "sum", "max", "min", "count", "avg", "topk", "rate", "increase", "changes", "resets", "time", "vector",
-    "histogram_quantile", "predict_linear", "le", "inf", "nan",
+    "histogram_quantile", "predict_linear", "le", "inf", "nan", "absent", "group", "sum_over_time",
+    "avg_over_time",
 }
 
 

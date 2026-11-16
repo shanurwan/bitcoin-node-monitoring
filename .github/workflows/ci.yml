@@ -46,6 +46,9 @@ jobs:
       - name: Lint dashboard
         run: python3 scripts/lint_dashboard.py
 
+      - name: Exporter tests (fake bitcoind, including warmup and malformed replies)
+        run: python3 -m unittest discover -s tests -v
+
       - name: Exporter compiles and renders metrics without a node
         run: |
           python3 -m py_compile exporter/bitcoind_exporter.py scripts/*.py

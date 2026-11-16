@@ -1,9 +1,14 @@
 # BitcoindNoNewBlocks
 
-**Alerts:** `BitcoindNoNewBlocks`  
-**Severity:** critical
+**Alerts:** `BitcoindNoNewBlocks` (warning), `BitcoindBehindFleet` (critical)  
+**Severity:** warning / critical
 
-bitcoind's height has not changed for 95 minutes and the node is not in initial block download.
+`BitcoindNoNewBlocks`: bitcoind's height has not changed for 95 minutes and the node is not in initial block
+download. `BitcoindBehindFleet`: the node has been more than 2 blocks behind your highest node for 10 minutes (needs
+two or more nodes).
+
+`BitcoindNoNewBlocks` is a warning because a real 95-minute gap between mainnet blocks happens about four times a
+year, on every node at once. A node that is stuck while the others move on is what `BitcoindBehindFleet` pages for.
 
 ## Impact
 
@@ -18,7 +23,8 @@ If the node is stuck, every client of electrs sees stale confirmations and balan
 
 ## Likely causes
 
-- The network is slow: on mainnet a 95-minute gap happens roughly once in 8,000 such windows, so occasionally it is real. Testnets can be irregular.
+- The network is slow: the chance of no mainnet block for 95 minutes is e^-9.5, about 1 in 13,000 block intervals,
+  or about four times a year. Testnets can be irregular. If every node alerts at once, this is the likely cause.
 - The node is partitioned (few or no peers, or only peers that are themselves stuck).
 - The node rejected a block, for example after a consensus-rule change it does not know about (bitcoind also reports a warning).
 
@@ -32,15 +38,6 @@ If the node is stuck, every client of electrs sees stale confirmations and balan
 
 Other nodes have moved on and yours has not, or `getchaintips` shows an invalid tip.
 
-## Handoff note
+## Handoff
 
-Copy this into the incident channel or ticket when you hand over:
-
-```text
-Alert:      BitcoindNoNewBlocks on <node>, firing since <UTC time>
-Impact:     <who is affected and how; "none yet" is a valid answer>
-Checked:    <what you looked at and what it showed>
-Done:       <actions taken, with times>
-State now:  <current heights / error rates / memory, from the dashboard>
-Next:       <what the next person should do or watch, and when to escalate>
-```
+Use the [handoff note](README.md#handoff-note).

@@ -3,7 +3,9 @@
 **Alerts:** `ElectrsMainLoopStalled`  
 **Severity:** critical
 
-`electrs_main_loop_count`, which goes up every 5 seconds, has not changed for 15 minutes while the process is still scraped.
+`electrs_main_loop_count`, which goes up every 5 seconds, has not changed for 15 minutes while the process is still
+scraped. The alert is suppressed while `bitcoind_up` is 0 for the same node: electrs retries forever while bitcoind
+is unreachable or warming up, and `BitcoindDown` or `BitcoindWarmupTooLong` already covers that.
 
 ## Impact
 
@@ -13,10 +15,14 @@ electrs is alive but no longer indexes new blocks or syncs the mempool. Reads st
 
 1. Log: the last lines usually show the step it is stuck in (an RPC call, `indexing`, mempool sync).
 2. Stack trace before restarting: `gdb -p <pid> -batch -ex 'thread apply all bt' > electrs-stack.txt`.
-3. bitcoind responsiveness: a hung RPC call can block the loop.
+3. bitcoind as electrs sees it: the exporter may reach bitcoind while electrs cannot (a different address, a stale
+   cookie, `-rpcwhitelist`, or `-rpcmaxconnections` reached). Look for `reconnecting to bitcoind` or
+   `bitcoind is warming up` repeating in the electrs log, and at the RPC handshake panel.
 
 ## Likely causes
 
+- electrs waiting on bitcoind: its main-loop RPC calls retry every 3 s, forever, on connection errors and on error
+  -28, so any bitcoind problem electrs sees and the exporter does not stops the loop.
 - A blocking RPC call to bitcoind that never returns.
 - A long mempool sync on a very large mempool.
 - Lock contention or a bug.
@@ -29,15 +35,6 @@ Capture the stack, then restart electrs. If bitcoind was the cause, fix it first
 
 It recurs; attach the stack trace and logs to an upstream issue.
 
-## Handoff note
+## Handoff
 
-Copy this into the incident channel or ticket when you hand over:
-
-```text
-Alert:      ElectrsMainLoopStalled on <node>, firing since <UTC time>
-Impact:     <who is affected and how; "none yet" is a valid answer>
-Checked:    <what you looked at and what it showed>
-Done:       <actions taken, with times>
-State now:  <current heights / error rates / memory, from the dashboard>
-Next:       <what the next person should do or watch, and when to escalate>
-```
+Use the [handoff note](README.md#handoff-note).
