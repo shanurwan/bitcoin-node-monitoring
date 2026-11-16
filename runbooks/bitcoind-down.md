@@ -17,6 +17,9 @@ electrs stops indexing new blocks and cannot broadcast transactions. Anything el
    scheduled or not discovered (`kubectl get pod`, check the pod is not Pending, check the ServiceMonitor selector and
    the `bitcoin-node` pod label); `up` is 0 when the exporter is down; `bitcoind_up` is 0 when the exporter runs but
    RPC fails, and `bitcoind_rpc_warmup` is 1 when bitcoind is still starting.
+   A scrape job removed from the Prometheus config pages late: in the game day, Prometheus 3.15.1 kept serving the
+   job's last sample for 5 minutes after the reload, so the page came about 10 minutes after the change, not 5. If
+   a config change went out in the last 15 minutes, check it first.
 2. Is bitcoind running? `systemctl status bitcoind` / `kubectl get pod -l app=bitcoind`, and the tail of `debug.log`.
 3. Can you reach RPC yourself? `bitcoin-cli getblockchaininfo`. A hang usually means bitcoind is busy (startup, reindex, `-rpcworkqueue` full); an auth error means the cookie or password changed.
 4. Exporter logs print the RPC error on every failed scrape.

@@ -252,18 +252,37 @@ tests:
       - eval_time: 6m
         alertname: BitcoindDown
         exp_alerts:
-          # One for the job having no target, one for the electrs pair without bitcoind.
-          - exp_labels: {alertname: BitcoindDown, severity: critical, job: bitcoind}
-            exp_annotations:
-              description: "For 5 minutes bitcoind's JSON-RPC has not answered, or its exporter is not scraped or has no target at all. electrs on this node cannot index new blocks or relay transactions."
-              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-down.md"
-              summary: "bitcoind on every node is not answering RPC"
+          # Once, for the node whose electrs has no bitcoind. The game day found the job-level
+          # absent() check paging a second time for the same fault.
           - exp_labels: {alertname: BitcoindDown, severity: critical, node: a}
             exp_annotations:
               description: "For 5 minutes bitcoind's JSON-RPC has not answered, or its exporter is not scraped or has no target at all. electrs on this node cannot index new blocks or relay transactions."
               runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-down.md"
               summary: "bitcoind on a is not answering RPC"
       - {eval_time: 6m, alertname: ElectrsDown, exp_alerts: []}
+
+  - name: neither bitcoind nor electrs has a target
+    interval: 1m
+    input_series:
+      - series: 'up{job="node", node="a", instance="node:9100"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BitcoindDown
+        exp_alerts:
+          - exp_labels: {alertname: BitcoindDown, severity: critical, job: bitcoind}
+            exp_annotations:
+              description: "For 5 minutes bitcoind's JSON-RPC has not answered, or its exporter is not scraped or has no target at all. electrs on this node cannot index new blocks or relay transactions."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-down.md"
+              summary: "bitcoind on every node is not answering RPC"
+      - eval_time: 6m
+        alertname: ElectrsDown
+        exp_alerts:
+          - exp_labels: {alertname: ElectrsDown, severity: critical, job: electrs}
+            exp_annotations:
+              description: "For 5 minutes Prometheus has not scraped electrs, or has no electrs target at all. The monitoring endpoint starts before indexing, so this means the process is not running, not reachable, or not scheduled."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-down.md"
+              summary: "electrs on every node is down"
 
   - name: one node falls behind the fleet
     interval: 1m
@@ -287,6 +306,35 @@ tests:
               description: "bitcoind on b has been more than 2 blocks behind the highest node for 10 minutes. The other nodes see new blocks, so this one is stuck or cut off."
               runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-no-new-blocks.md"
               summary: "bitcoind on b is behind the other nodes"
+
+  - name: node rejects a chain ahead of its own tip
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_blocks{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '100x20'
+      - series: 'bitcoind_invalid_tip_height{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '0 0 101x18'
+    alert_rule_test:
+      - {eval_time: 10m, alertname: BitcoindRejectedChainAhead, exp_alerts: []}
+      - eval_time: 13m
+        alertname: BitcoindRejectedChainAhead
+        exp_alerts:
+          - exp_labels: {alertname: BitcoindRejectedChainAhead, severity: critical, node: a, job: bitcoind, instance: "exp:9332"}
+            exp_annotations:
+              summary: "bitcoind on a rejected a chain that is ahead of its own"
+              description: "bitcoind on a has marked a block at height 101 invalid, above its own tip, for 10 minutes. Either this node rejects blocks the network accepts, or part of the network is mining an invalid chain."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-rejected-chain-ahead.md"
+
+  - name: an old invalid block below the tip is not a split
+    interval: 1m
+    input_series:
+      - series: 'bitcoind_blocks{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '100+1x30'
+      - series: 'bitcoind_invalid_tip_height{job="bitcoind", node="a", instance="exp:9332"}'
+        values: '101x30'
+    alert_rule_test:
+      # 101 is above the tip only at minute 0; the node then moves past it on another chain.
+      - {eval_time: 25m, alertname: BitcoindRejectedChainAhead, exp_alerts: []}
 
   - name: a node in IBD is not behind the fleet
     interval: 1m
@@ -941,3 +989,51 @@ tests:
               description: "Objective: 99% of Electrum RPC calls served within 2.5 s over 30 days. At the current rate the error budget would be gone within 10 to 30 days."
               runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-electrum-latency-slo.md"
               summary: "electrs electrum-latency SLO on a is burning its error budget (slow)"
+
+  # ---------------------------------------------------------------- OOM kills
+  - name: kernel OOM kill on the host
+    interval: 1m
+    input_series:
+      - series: 'node_vmstat_oom_kill{job="node", node="a", instance="node:9100"}'
+        values: '1121x5 1125 1129x30'
+    alert_rule_test:
+      - {eval_time: 4m, alertname: BitcoinNodeOOMKilled, exp_alerts: []}
+      - eval_time: 7m
+        alertname: BitcoinNodeOOMKilled
+        exp_alerts:
+          - exp_labels: {alertname: BitcoinNodeOOMKilled, severity: warning, job: node, node: a, instance: "node:9100"}
+            exp_annotations:
+              summary: "A process on a was killed for using too much memory"
+              description: "The kernel killed a process for memory in the last 5 minutes (node_vmstat_oom_kill), or a bitcoind or electrs container restarted after an OOMKilled exit. If ElectrsDown or BitcoindDown is firing too, this is the cause."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-memory-high.md#oom-kills"
+      # Still firing 15 minutes on (keep_firing_for), quiet after that.
+      - {eval_time: 30m, alertname: BitcoinNodeOOMKilled, exp_alerts: []}
+
+  - name: electrs container restarted after OOMKilled
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="btc", pod="electrs-0", container="electrs"}'
+        values: '0x5 1x10'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="btc", pod="electrs-0", container="electrs", reason="OOMKilled"}'
+        values: '_x5 1x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: BitcoinNodeOOMKilled
+        exp_alerts:
+          - exp_labels: {alertname: BitcoinNodeOOMKilled, severity: warning, namespace: btc, pod: electrs-0, container: electrs}
+            exp_annotations:
+              summary: "A process on electrs-0 was killed for using too much memory"
+              description: "The kernel killed a process for memory in the last 5 minutes (node_vmstat_oom_kill), or a bitcoind or electrs container restarted after an OOMKilled exit. If ElectrsDown or BitcoindDown is firing too, this is the cause."
+              runbook_url: "https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-memory-high.md#oom-kills"
+
+  - name: a container restart that was not an OOM kill
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="btc", pod="electrs-0", container="electrs"}'
+        values: '0x5 1x10'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="btc", pod="electrs-0", container="electrs", reason="Error"}'
+        values: '_x5 1x10'
+      - series: 'node_vmstat_oom_kill{job="node", node="a", instance="node:9100"}'
+        values: '1121x15'
+    alert_rule_test:
+      - {eval_time: 7m, alertname: BitcoinNodeOOMKilled, exp_alerts: []}

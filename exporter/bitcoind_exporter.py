@@ -226,6 +226,11 @@ def collect():
                   {"status": status})
         for status, n in counts.items():
             m.add("bitcoind_chain_tips", "gauge", "Known chain tips by status", n, {"status": status})
+        # A tip this node marked invalid that is higher than its own chain means it rejected blocks
+        # other nodes are building on: a consensus split (BIP 50) or an invalid block from a miner.
+        m.add("bitcoind_invalid_tip_height", "gauge",
+              "Height of the highest chain tip this node marked invalid (0 if none)",
+              max([t.get("height", 0) for t in tips if t.get("status") == "invalid"] or [0]))
 
     for method, n in RPC_ERRORS.items():
         m.add("bitcoind_exporter_rpc_errors_total", "counter",

@@ -14,8 +14,10 @@ groups:
         expr: |
           (bitcoind_up{job="bitcoind"} == 0 unless on (instance) bitcoind_rpc_warmup{job="bitcoind"} == 1)
             or up{job="bitcoind"} == 0
-            or absent(up{job="bitcoind"})
             or (group by (node) (up{job="electrs"}) unless on (node) group by (node) (up{job="bitcoind"}))
+            # No bitcoind target anywhere. When electrs is scraped, the line above already
+            # names each node; firing here too paged twice for one fault in the game day.
+            or (absent(up{job="bitcoind"}) unless on () group(up{job="electrs"}))
         for: 5m
         labels:
           severity: critical
@@ -90,6 +92,20 @@ groups:
           description: "bitcoind on {{ $labels.node }} has been more than 2 blocks behind the highest node for 10 minutes. The other nodes see new blocks, so this one is stuck or cut off."
           runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-no-new-blocks.md
 
+      - alert: BitcoindRejectedChainAhead
+        # The node marked a block invalid that is higher than its own tip: either it rejects a
+        # chain the network accepts (March 2013, BIP 50) or a miner extends an invalid chain
+        # (July 2015, BIP 66). Both need a human. Neither moves headers past blocks, because
+        # bitcoind drops headers that build on an invalid block, so BlocksBehindHeaders stays quiet.
+        expr: bitcoind_invalid_tip_height{job="bitcoind"} > bitcoind_blocks{job="bitcoind"}
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "bitcoind on {{ $labels.node }} rejected a chain that is ahead of its own"
+          description: "bitcoind on {{ $labels.node }} has marked a block at height {{ $value }} invalid, above its own tip, for 10 minutes. Either this node rejects blocks the network accepts, or part of the network is mining an invalid chain."
+          runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/bitcoind-rejected-chain-ahead.md
+
       - alert: BitcoindBlocksBehindHeaders
         expr: (bitcoind_headers{job="bitcoind"} - bitcoind_blocks{job="bitcoind"}) > 2 and bitcoind_initial_block_download{job="bitcoind"} == 0
         for: 30m
@@ -136,8 +152,8 @@ groups:
       - alert: ElectrsDown
         expr: |
           up{job="electrs"} == 0
-            or absent(up{job="electrs"})
             or (group by (node) (up{job="bitcoind"}) unless on (node) group by (node) (up{job="electrs"}))
+            or (absent(up{job="electrs"}) unless on () group(up{job="bitcoind"}))
         for: 5m
         labels:
           severity: critical
@@ -330,6 +346,27 @@ groups:
 
   - name: bitcoin-node-host.alerts
     rules:
+      - alert: BitcoinNodeOOMKilled
+        # A process killed for memory within seconds of starting never answers a scrape, so
+        # ElectrsMemoryHigh and ElectrsRestartLoop have no data to fire on. In the game day an
+        # electrs OOM loop (31 kills in 8 minutes) was seen only by ElectrsDown, after 6 minutes.
+        # The kernel's counter, or the container's last exit reason, gives the cause at once.
+        expr: |
+          increase(node_vmstat_oom_kill{job="node"}[5m]) > 0
+            or (
+              sum by (namespace, pod, container) (increase(kube_pod_container_status_restarts_total{container=~"bitcoind|electrs"}[5m])) > 0
+                and on (namespace, pod, container)
+              max by (namespace, pod, container) (kube_pod_container_status_last_terminated_reason{container=~"bitcoind|electrs", reason="OOMKilled"}) == 1
+            )
+        for: 0m
+        keep_firing_for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'A process on {{ or $labels.node $labels.pod }} was killed for using too much memory'
+          description: "The kernel killed a process for memory in the last 5 minutes (node_vmstat_oom_kill), or a bitcoind or electrs container restarted after an OOMKilled exit. If ElectrsDown or BitcoindDown is firing too, this is the cause."
+          runbook_url: https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/runbooks/electrs-memory-high.md#oom-kills
+
       - alert: BitcoinNodeDiskWillFill
         expr: |
           predict_linear(node_filesystem_avail_bytes{job="node", fstype!~"tmpfs|ramfs|overlay|squashfs"}[6h], 48 * 3600) < 0

@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bitcoin node game day</title>
+<meta name="description" content="Six real incidents replayed on a live bitcoind + electrs node: the faults, the alerts, the pages and the runbook fixes, as recorded.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: dark;
+  --page: #0c0d10; --raise: #14161a; --raise-2: #1a1d22; --line: #262930; --line-2: #33373f;
+  --ink: #ecebe6; --ink-2: #b9b7af; --muted: #8b8980;
+  --accent: #f2a541; --accent-ink: #1a1206;
+  --ok: #3ccf7a; --warn: #f5b83d; --crit: #ff5a52; --info: #5aa2ff;
+  --stage: #0e0f12;
+  --serif: "Instrument Serif", ui-serif, Georgia, serif;
+  --sans: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --page: #f6f5f1; --raise: #ffffff; --raise-2: #f0eee8; --line: #e3e0d7; --line-2: #d3cfc3;
+    --ink: #151513; --ink-2: #47463f; --muted: #706e66;
+    --accent: #b8650a; --accent-ink: #ffffff;
+    --ok: #138a47; --warn: #a86b00; --crit: #c8312b; --info: #2a6fd1;
+  }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page: #f6f5f1; --raise: #ffffff; --raise-2: #f0eee8; --line: #e3e0d7; --line-2: #d3cfc3;
+  --ink: #151513; --ink-2: #47463f; --muted: #706e66;
+  --accent: #b8650a; --accent-ink: #ffffff;
+  --ok: #138a47; --warn: #a86b00; --crit: #c8312b; --info: #2a6fd1;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 16px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+a { color: inherit; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); text-underline-offset: 3px; }
+a:hover { text-decoration-color: currentColor; }
+.wrap { width: min(1160px, 100% - 32px); margin-inline: auto; }
+.mono { font-family: var(--mono); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+/* ------------------------------------------------------------ hero */
+.hero { text-align: center; padding: 88px 0 40px; }
+.eyebrow { font: 500 12.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+  display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 18%, transparent); }
+.hero h1 { font: 400 clamp(40px, 6.4vw, 76px)/1.02 var(--serif); letter-spacing: -0.015em; margin: 22px auto 18px; max-width: 20ch; }
+.hero h1 em { color: var(--accent); }
+.lede { max-width: 640px; margin: 0 auto; color: var(--ink-2); font-size: 18px; }
+.byline { margin-top: 22px; color: var(--muted); font-size: 14.5px; display: flex; gap: 8px 18px; justify-content: center; flex-wrap: wrap; }
+.byline b { color: var(--ink); font-weight: 500; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); max-width: 880px; margin: 44px auto 0;
+  border: 1px solid var(--line); border-radius: 16px; background: var(--raise); overflow: hidden; }
+.stats div { padding: 18px 16px 16px; border-left: 1px solid var(--line); }
+.stats div:first-child { border-left: 0; }
+.stats dt { font: 400 34px/1.1 var(--serif); color: var(--ink); font-variant-numeric: tabular-nums; }
+.stats dd { margin: 4px 0 0; font-size: 13px; color: var(--muted); line-height: 1.35; }
+@media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } .stats div:nth-child(3) { border-left: 0; } .stats div:nth-child(n+3) { border-top: 1px solid var(--line); } }
+
+/* ------------------------------------------------------------ drill picker */
+.picker { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 56px auto 18px; }
+.pick { border: 1px solid var(--line); background: var(--raise); border-radius: 999px; padding: 8px 14px 8px 10px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 10px; font-size: 14.5px; color: var(--ink-2); transition: border-color .2s, background .2s, color .2s; }
+.pick .n { font: 500 11.5px/1 var(--mono); width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--raise-2); color: var(--muted); }
+.pick:hover { border-color: var(--line-2); color: var(--ink); }
+.pick[aria-selected="true"] { border-color: var(--accent); color: var(--ink); background: color-mix(in srgb, var(--accent) 9%, var(--raise)); }
+.pick[aria-selected="true"] .n { background: var(--accent); color: var(--accent-ink); }
+
+/* ------------------------------------------------------------ stage */
+.stage { position: relative; height: clamp(460px, 58vw, 660px); border-radius: 22px; overflow: hidden; background:
+  radial-gradient(120% 90% at 50% 0%, #1b1e25 0%, var(--stage) 60%); border: 1px solid #23262d;
+  box-shadow: 0 40px 80px -40px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.04); color: #ecebe6; isolation: isolate; }
+.stage canvas { display: block; position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }
+.stage canvas:active { cursor: grabbing; }
+.labels { position: absolute; inset: 0; pointer-events: none; }
+.lbl { font: 500 11.5px/1.25 var(--sans); color: #ecebe6; background: rgba(16,18,22,.72); border: 1px solid rgba(255,255,255,.08);
+  backdrop-filter: blur(6px); padding: 5px 9px 6px; border-radius: 9px; white-space: nowrap; text-align: center; transform: translateY(-6px); }
+.lbl b { display: block; font: 600 11px/1.2 var(--mono); letter-spacing: .02em; }
+.lbl span { color: #b9b7af; font-size: 11px; }
+.lbl.crit { border-color: rgba(255,90,82,.6); } .lbl.crit span { color: #ffb3ae; }
+.lbl.warn { border-color: rgba(245,184,61,.55); } .lbl.warn span { color: #ffd98a; }
+.lbl.quiet { opacity: .8; }
+@media (max-width: 720px) { .lbl.minor, .zone { display: none; } .lbl { font-size: 10.5px; padding: 4px 7px; } }
+.zone { font: 500 10.5px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #6f7480; }
+.cut { font: 600 11px/1 var(--mono); color: #ffb3ae; background: rgba(60,14,12,.8); border: 1px solid rgba(255,90,82,.5); padding: 4px 7px; border-radius: 6px; }
+
+.hud-top { position: absolute; left: 0; right: 0; top: 0; display: flex; justify-content: space-between; gap: 16px; padding: 20px 22px; pointer-events: none;
+  background: linear-gradient(to bottom, rgba(14,15,18,.85), rgba(14,15,18,0)); }
+.hud-title small { font: 500 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: #8b8980; }
+.hud-title h2 { margin: 6px 0 4px; font: 400 30px/1.05 var(--serif); }
+.hud-title p { margin: 0; font-size: 13.5px; color: #b9b7af; max-width: 520px; min-height: 2.6em; }
+.clock { text-align: right; font-family: var(--mono); white-space: nowrap; }
+.clock b { display: block; font-size: 26px; font-weight: 500; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.clock small { color: #8b8980; font-size: 12px; }
+.toasts { position: absolute; right: 18px; top: 112px; width: 300px; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.toast { background: rgba(18,20,24,.86); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.08); border-left: 3px solid var(--c);
+  border-radius: 10px; padding: 9px 12px; font-size: 12.5px; animation: slide .35s ease-out; }
+.toast .h { font: 600 10.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--c); margin-bottom: 4px; display: flex; justify-content: space-between; }
+.toast .h span { color: #8b8980; font-weight: 500; }
+.toast .b { color: #ecebe6; font-family: var(--mono); font-size: 12px; word-break: break-word; }
+@keyframes slide { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+.hint { position: absolute; left: 22px; bottom: 92px; font: 500 11px/1 var(--mono); color: #6f7480; pointer-events: none; letter-spacing: .04em; }
+
+.transport { position: absolute; left: 16px; right: 16px; bottom: 16px; display: flex; align-items: center; gap: 14px;
+  background: rgba(20,22,27,.78); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,.07); border-radius: 14px; padding: 10px 14px; }
+.play { width: 42px; height: 42px; border-radius: 50%; border: 0; background: var(--accent); color: #1a1206; cursor: pointer; display: grid; place-items: center; flex: none; }
+.play svg { width: 16px; height: 16px; }
+.track { position: relative; flex: 1; height: 42px; }
+.track input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; margin: 0; }
+.rail { position: absolute; left: 0; right: 0; top: 19px; height: 4px; border-radius: 4px; background: rgba(255,255,255,.1); pointer-events: none; }
+.fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--accent); }
+.knob { position: absolute; top: 13px; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.5); pointer-events: none; }
+.tick { position: absolute; top: 0; height: 42px; width: 0; pointer-events: none; }
+.tick::before { content: ""; position: absolute; left: -1px; top: 15px; width: 2px; height: 12px; border-radius: 2px; background: var(--c, #8b8980); }
+.tick span { position: absolute; top: 31px; left: 0; transform: translateX(-50%); font: 500 9.5px/1 var(--mono); color: #8b8980; white-space: nowrap; letter-spacing: .02em; }
+.tick:nth-child(even) span { top: 0; }
+.speeds { display: flex; gap: 2px; background: rgba(255,255,255,.06); border-radius: 9px; padding: 3px; flex: none; }
+.speeds button { border: 0; background: none; color: #b9b7af; font: 500 12px/1 var(--mono); padding: 7px 8px; border-radius: 7px; cursor: pointer; }
+.speeds button[aria-pressed="true"] { background: rgba(255,255,255,.12); color: #fff; }
+@media (max-width: 720px) {
+  .hud-title h2 { font-size: 22px; } .hud-title p { display: none; } .clock b { font-size: 20px; }
+  .toasts { top: auto; bottom: 86px; right: 12px; left: 12px; width: auto; }
+  .toast:not(:first-child) { display: none; }
+  .hint { display: none; }
+  .speeds button:nth-child(1), .speeds button:nth-child(4) { display: none; }
+  .tick span { display: none; }
+}
+
+/* ------------------------------------------------------------ sections below */
+section.block { margin-top: 72px; }
+.kicker { font: 500 12px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--accent); text-align: center; }
+.block > h3, .center-h { font: 400 clamp(30px, 4vw, 44px)/1.08 var(--serif); text-align: center; margin: 12px auto 12px; max-width: 22ch; letter-spacing: -0.01em; }
+.sub { text-align: center; color: var(--ink-2); max-width: 640px; margin: 0 auto 32px; }
+
+.panes { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; margin-top: 18px; }
+@media (max-width: 900px) { .panes { grid-template-columns: minmax(0, 1fr); } }
+.pane { background: var(--raise); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; min-width: 0; }
+.pane h4 { margin: 0 0 12px; font: 500 12px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; }
+.feed { list-style: none; margin: 0; padding: 0; max-height: 440px; overflow: auto; scrollbar-width: thin; }
+.feed li { display: grid; grid-template-columns: 54px 66px minmax(0, 1fr); gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 14px; transition: opacity .3s; }
+.feed li:first-child { border-top: 0; }
+.feed li.future { opacity: .28; }
+.feed .t { font: 400 12.5px/1.6 var(--mono); color: var(--muted); }
+.feed .k { font: 600 10.5px/1.9 var(--mono); letter-spacing: .07em; text-transform: uppercase; }
+.k.inject, .k.page { color: var(--crit); } .k.ticket { color: var(--info); } .k.fix { color: var(--accent); }
+.k.clear { color: var(--ok); } .k.seen, .k.note, .k.ack { color: var(--muted); }
+
+.alerts { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.alerts td { padding: 8px 0; border-top: 1px solid var(--line); }
+.alerts tr:first-child td { border-top: 0; }
+.alerts .nm { font-family: var(--mono); font-size: 12.5px; word-break: break-word; }
+.alerts .sv { display: block; color: var(--muted); font-size: 11.5px; font-family: var(--mono); }
+.chip { display: inline-flex; align-items: center; gap: 6px; font: 500 11.5px/1 var(--mono); border-radius: 999px; padding: 5px 9px; border: 1px solid; white-space: nowrap; }
+.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.chip.firing { color: var(--crit); } .chip.pending { color: var(--warn); } .chip.resolved { color: var(--ok); }
+.chip.inhibited { color: var(--muted); } .chip.inhibited::before { background: none; border: 1.5px solid currentColor; width: 5px; height: 5px; }
+.empty { color: var(--muted); font-size: 13.5px; margin: 0; }
+.chart { margin-top: 16px; position: relative; }
+.chart .ct { font-size: 13px; color: var(--ink-2); margin-bottom: 4px; }
+.chart svg { display: block; max-width: 100%; height: auto; overflow: visible; }
+.chart .tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--page); font: 500 11.5px/1 var(--mono);
+  padding: 6px 8px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, -100%); display: none; }
+.ax { fill: var(--muted); font: 400 10.5px var(--mono); }
+
+.incidents { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.incident { background: var(--raise); border: 1px solid var(--line); border-radius: 16px; padding: 22px 22px 20px; display: flex; flex-direction: column; }
+.incident .date { font: 500 11.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.incident h5 { font: 400 24px/1.15 var(--serif); margin: 10px 0 8px; }
+.incident p { margin: 0 0 16px; color: var(--ink-2); font-size: 15px; }
+.incident a { margin-top: auto; font-weight: 500; font-size: 14px; color: var(--accent); text-decoration: none; display: inline-flex; gap: 6px; align-items: center; }
+.incident a:hover { text-decoration: underline; }
+.fault { text-align: center; color: var(--muted); font-size: 14px; margin: -18px auto 28px; max-width: 680px; }
+.fault code { font-family: var(--mono); font-size: 13px; color: var(--ink-2); }
+
+.findings { display: grid; gap: 12px; max-width: 860px; margin: 0 auto; counter-reset: f; }
+.finding { background: var(--raise); border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px 20px 64px; position: relative; }
+.finding::before { counter-increment: f; content: counter(f, decimal-leading-zero); position: absolute; left: 22px; top: 21px; font: 500 13px/1 var(--mono); color: var(--accent); }
+.finding h5 { margin: 0 0 6px; font-size: 16.5px; font-weight: 600; }
+.finding p { margin: 0; color: var(--ink-2); font-size: 15px; }
+.finding .fix { margin-top: 10px; font-size: 13.5px; color: var(--muted); }
+.finding .fix b { color: var(--ok); font-weight: 500; }
+.shows { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--raise); overflow: hidden; }
+.shows div { padding: 22px 20px; border-left: 1px solid var(--line); }
+.shows div:first-child { border-left: 0; }
+.shows h5 { margin: 0 0 8px; font: 400 21px/1.15 var(--serif); }
+.shows p { margin: 0; color: var(--ink-2); font-size: 14.5px; }
+@media (max-width: 900px) { .shows { grid-template-columns: 1fr 1fr; } .shows div:nth-child(3) { border-left: 0; } .shows div:nth-child(n+3) { border-top: 1px solid var(--line); } }
+@media (max-width: 560px) { .shows { grid-template-columns: 1fr; } .shows div { border-left: 0; border-top: 1px solid var(--line); } .shows div:first-child { border-top: 0; } }
+footer { margin: 96px auto 56px; text-align: center; color: var(--muted); font-size: 14px; }
+footer p { margin: 6px 0; }
+noscript p { text-align: center; color: var(--muted); }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<main class="wrap">
+  <header class="hero">
+    <div class="eyebrow"><span class="dot"></span>Game day · Bitcoin Core 32.1 + Blockstream electrs · testnet4</div>
+    <h1>Six real incidents, <em>replayed on a live Bitcoin node</em></h1>
+    <p class="lede">I broke a running bitcoind and electrs six ways, each modelled on a public incident, and let the
+      monitoring do its job. Every alert, page and runbook fix below is a recording, not an animation.</p>
+    <div class="byline">
+      <span>By <b><a href="https://github.com/shanurwan">Wan Nur Shafiqah</a></b></span>
+      <a href="https://github.com/shanurwan/bitcoin-node-monitoring">Repository</a>
+      <a href="https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/docs/game-day.md">Full write-up</a>
+      <a href="https://github.com/shanurwan/bitcoin-node-monitoring/tree/main/runbooks">Runbooks</a>
+    </div>
+    <dl class="stats" id="stats"></dl>
+  </header>
+
+  <nav class="picker" id="picker" role="tablist" aria-label="Choose a drill"></nav>
+
+  <section class="stage" id="stage" aria-label="3D replay of the lab">
+    <div class="hud-top">
+      <div class="hud-title"><small id="h-kicker"></small><h2 id="h-title"></h2><p id="h-now"></p></div>
+      <div class="clock"><b id="clock">T+00:00</b><small id="total"></small></div>
+    </div>
+    <div class="toasts" id="toasts" aria-live="polite"></div>
+    <div class="hint">Drag to orbit</div>
+    <div class="transport">
+      <button class="play" id="play" type="button" aria-label="Play"></button>
+      <div class="track">
+        <div class="rail"><div class="fill" id="fill"></div></div>
+        <div id="ticks"></div>
+        <div class="knob" id="knob"></div>
+        <input id="scrub" type="range" min="0" max="1000" step="1" value="0" aria-label="Replay position">
+      </div>
+      <div class="speeds" id="speeds" role="group" aria-label="Replay speed">
+        <button type="button" data-s="10">10×</button><button type="button" data-s="30">30×</button>
+        <button type="button" data-s="60" aria-pressed="true">60×</button><button type="button" data-s="120">120×</button>
+      </div>
+    </div>
+  </section>
+  <noscript><p>The replay needs JavaScript. The recordings are in <a href="https://github.com/shanurwan/bitcoin-node-monitoring/tree/main/docs/replay">docs/replay</a>.</p></noscript>
+
+  <div class="panes">
+    <div class="pane"><h4>Timeline <span id="tl-count"></span></h4><ul class="feed" id="feed"></ul></div>
+    <div class="pane">
+      <h4>Alerts</h4>
+      <table class="alerts"><tbody id="alerts"></tbody></table>
+      <p class="empty" id="alerts-empty">Quiet. No alert has started yet.</p>
+      <div id="charts"></div>
+    </div>
+  </div>
+
+  <section class="block" id="real">
+    <div class="kicker">The real incident</div>
+    <h3 id="r-title">What this drill is based on</h3>
+    <p class="fault" id="r-fault"></p>
+    <div class="incidents" id="incidents"></div>
+  </section>
+
+  <section class="block" id="found">
+    <div class="kicker">Findings</div>
+    <h3>What the game day caught</h3>
+    <p class="sub">Running the failures for real found gaps that the rule tests could not.</p>
+    <div class="findings" id="findings"></div>
+  </section>
+
+  <section class="block">
+    <div class="kicker">The work behind it</div>
+    <h3>What this shows</h3>
+    <p class="sub">The parts of on-call reliability work this project covers, end to end.</p>
+    <div class="shows">
+      <div><h5>Alerts that page once</h5><p>Critical pages, warning opens a ticket. Alerts that are only symptoms of a down bitcoind stay quiet in the rules and are inhibited in Alertmanager, so one fault sends one page.</p></div>
+      <div><h5>Detection, measured</h5><p>Every time-to-page on this page comes from a recording on a live node, not from reading the <code>for:</code> clauses.</p></div>
+      <div><h5>Runbooks that work</h5><p>Each drill ends with the runbook's own mitigation, applied after the page arrives, until every alert resolves.</p></div>
+      <div><h5>Gaps closed</h5><p>What the drills found became new alerts, tests and runbooks in the same repository, with the reasons written down.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    <p>Lab: Bitcoin Core 32.1 and Blockstream electrs on testnet4, Prometheus 3.15.1, Alertmanager 0.28.1, recorded every 5 seconds.</p>
+    <p>Sources: <a href="https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/gameday/gameday.py">gameday.py</a> ·
+      <a href="https://github.com/shanurwan/bitcoin-node-monitoring/blob/main/examples/alertmanager.yml">alertmanager.yml</a> ·
+      <a href="https://github.com/shanurwan/bitcoin-node-monitoring/tree/main/docs/replay">raw recordings</a></p>
+  </footer>
+</main>
+
+<script src="replay/data.js"></script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+
+const DATA = window.GAMEDAY || [];
+const FINDINGS = window.GAMEDAY_FINDINGS || [];
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmt = (s) => { s = Math.max(0, Math.round(s)); return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); };
+const dur = (s) => s == null ? "–" : s >= 60 ? Math.floor(s / 60) + "m " + String(Math.round(s % 60)).padStart(2, "0") + "s" : Math.round(s) + "s";
+const num = (v) => v == null ? "–" : Math.round(v).toLocaleString("en-US");
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// Which part of the lab each drill's fix is applied to, and drill-specific facts.
+const TARGET = { "bitcoind-crash": "bitcoind", "consensus-split": "bitcoind", "network-isolation": "bitcoind",
+  "electrs-oom": "electrs", "rpc-overload": "bitcoind", "monitoring-gap": "prometheus" };
+const MEM_LIMIT = { "electrs-oom": 300 * 1048576 };
+
+// ------------------------------------------------------------------ analysis
+function analyse(sc) {
+  const run = sc.run, ev = run.events;
+  const inject = (ev.find((e) => e.kind === "inject") || { t: 0 }).t;
+  const firstNote = run.notifications.find((n) => n.status === "firing");
+  const firstPending = run.alerts.find((a) => a.pending.length || a.firing.length);
+  const action = ev.find((e) => e.kind === "action");
+  const clear = ev.find((e) => e.kind === "resolved");
+  const end = Math.max(run.samples.length ? run.samples[run.samples.length - 1].t : 0, clear ? clear.t : 0);
+  const names = new Map();
+  for (const a of run.alerts) for (const k of ["pending", "firing", "inhibited"]) for (const n of a[k]) if (!names.has(n)) names.set(n, a.t);
+  const inhibited = new Set(run.alerts.flatMap((a) => a.inhibited));
+  const pages = run.notifications.filter((n) => n.status === "firing" && n.receiver === "page" && n.t >= inject).length;
+  const moments = [
+    { t: inject, label: "fault", c: "var(--crit)" },
+    firstPending && { t: firstPending.t, label: "pending", c: "var(--warn)" },
+    firstNote && { t: firstNote.t, label: firstNote.receiver === "page" ? "paged" : "ticket", c: firstNote.receiver === "page" ? "var(--crit)" : "var(--info)" },
+    action && { t: action.t, label: "fix", c: "var(--accent)" },
+    clear && { t: clear.t, label: "clear", c: "var(--ok)" },
+  ].filter(Boolean);
+  // Timeline items.
+  const items = [];
+  ev.forEach((e) => items.push({ t: e.t, k: { inject: "inject", action: "fix", resolved: "clear", ack: "ack", observe: "seen", note: "note" }[e.kind] || "note", text: e.text }));
+  run.notifications.forEach((n) => items.push({ t: n.t, k: n.receiver === "page" ? "page" : "ticket",
+    text: (n.status === "resolved" ? "Resolved: " : "") + [...new Set(n.alerts.map((a) => a.alertname))].join(", ") + (n.status === "resolved" ? "" : n.receiver === "page" ? " paged the on-call" : " opened a ticket") }));
+  let prev = { pending: [], firing: [], inhibited: [] };
+  run.alerts.forEach((a) => {
+    a.pending.filter((n) => !prev.pending.includes(n) && !prev.firing.includes(n)).forEach((n) => items.push({ t: a.t, k: "seen", text: n + " pending, waiting out its for: duration" }));
+    a.firing.filter((n) => !prev.firing.includes(n)).forEach((n) => items.push({ t: a.t, k: "seen", text: n + " firing in Prometheus" }));
+    a.inhibited.filter((n) => !prev.inhibited.includes(n)).forEach((n) => items.push({ t: a.t, k: "seen", text: n + " held back by Alertmanager: a symptom of an alert already paging" }));
+    prev = a;
+  });
+  items.sort((p, q) => p.t - q.t || 0);
+  return { inject, firstNote, firstPending, action, clear, end, names, inhibited, pages, moments, items };
+}
+DATA.forEach((sc) => { sc.a = analyse(sc); });
+
+// ------------------------------------------------------------------ hero stats
+(() => {
+  const det = DATA.map((d) => d.a.firstNote ? d.a.firstNote.t - d.a.inject : null).filter((v) => v != null).sort((a, b) => a - b);
+  const med = det.length ? (det.length % 2 ? det[(det.length - 1) / 2] : (det[det.length / 2 - 1] + det[det.length / 2]) / 2) : null;
+  const pagesPer = DATA.filter((d) => d.a.pages > 0).map((d) => d.a.pages);
+  const onePage = pagesPer.filter((n) => n === 1).length;
+  const cleared = DATA.filter((d) => d.a.clear).length;
+  const cells = [
+    [String(DATA.length), "drills on a live bitcoind + electrs"],
+    [dur(med), "median time from fault to first page or ticket"],
+    [onePage + "/" + pagesPer.length, "paging drills that paged exactly once"],
+    [cleared + "/" + DATA.length, "drills ended by the runbook's fix, every alert resolved"],
+  ];
+  $("stats").innerHTML = cells.map(([v, l]) => `<div><dt>${esc(v)}</dt><dd>${esc(l)}</dd></div>`).join("");
+})();
+
+// ------------------------------------------------------------------ 3D stage
+const stageEl = $("stage");
+// Without WebGL the labels, HUD and replay still work over a flat backdrop.
+let renderer = null;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.3;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+  stageEl.prepend(renderer.domElement);
+  renderer.domElement.addEventListener("webglcontextlost", (e) => { e.preventDefault(); renderer.domElement.style.display = "none"; renderer = null; });
+} catch (e) { renderer = null; }
+const labelR = new CSS2DRenderer();
+labelR.domElement.className = "labels";
+stageEl.prepend(labelR.domElement);
+if (renderer) renderer.domElement.after(labelR.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x0e0f12, 46, 90);
+const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 300);
+const controls = new OrbitControls(camera, renderer ? renderer.domElement : stageEl);
+controls.enableDamping = true; controls.dampingFactor = 0.08;
+controls.enableZoom = false; controls.enablePan = false;
+controls.minPolarAngle = 0.45; controls.maxPolarAngle = 1.18;
+controls.minAzimuthAngle = -1.0; controls.maxAzimuthAngle = 1.25;
+controls.target.set(1, 0.4, 0.4);
+controls.autoRotate = false;
+
+scene.add(new THREE.HemisphereLight(0xdfe6ff, 0x1a1c20, 1.7));
+scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+const sun = new THREE.DirectionalLight(0xfff6ea, 2.9);
+sun.position.set(-8, 20, 12); sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { left: -18, right: 18, top: 12, bottom: -12, near: 1, far: 60 });
+sun.shadow.radius = 5; sun.shadow.bias = -0.0004;
+scene.add(sun);
+const rim = new THREE.DirectionalLight(0x8fb0ff, 0.8); rim.position.set(14, 8, -14); scene.add(rim);
+
+const COLORS = { ok: 0x3ccf7a, warn: 0xf5b83d, crit: 0xff5a52, info: 0x5aa2ff, idle: 0x4d535e, accent: 0xf2a541, cable: 0x5d6470 };
+const glowTex = (() => {
+  const c = document.createElement("canvas"); c.width = c.height = 128;
+  const g = c.getContext("2d"), r = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  r.addColorStop(0, "rgba(255,255,255,1)"); r.addColorStop(0.25, "rgba(255,255,255,.45)"); r.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = r; g.fillRect(0, 0, 128, 128);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+})();
+function glow(color, size) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.9 }));
+  s.scale.set(size, size, 1); return s;
+}
+function label(html, cls = "lbl") {
+  const d = document.createElement("div"); d.className = cls; d.innerHTML = html;
+  return new CSS2DObject(d);
+}
+const mat = (color, o = {}) => new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.55, metalness: 0.25 }, o));
+
+// Platform and zones.
+const plat = new THREE.Mesh(new RoundedBoxGeometry(30, 0.6, 16, 4, 0.3), mat(0x22252b, { roughness: 0.95, metalness: 0 }));
+plat.position.y = -0.3; plat.receiveShadow = true; scene.add(plat);
+function zone(x, z, w, d, text, back = false) {
+  const m = new THREE.Mesh(new RoundedBoxGeometry(w, 0.06, d, 2, 0.03), mat(0x2b2f36, { roughness: 0.9, metalness: 0 }));
+  m.position.set(x, 0.03, z); m.receiveShadow = true; scene.add(m);
+  const l = label(esc(text), "zone"); l.position.set(x - w / 2 + 0.2, 0.1, back ? z - d / 2 + 0.45 : z + d / 2 - 0.25); l.center.set(0, 0.5); scene.add(l);
+}
+zone(-10.2, 0, 7.4, 13, "Bitcoin network");
+zone(-0.8, 0.6, 11, 11.8, "Your node");
+zone(10, 3.4, 8.2, 5.2, "Wallets and apps");
+zone(10, -3.4, 8.2, 6.2, "Monitoring and on-call", true);
+
+// A unit: body, LED strip, glow, alert halo, label.
+function unit(name, w, h, d, x, z, bodyColor = 0x262a31) {
+  const g = new THREE.Group(); g.position.set(x, 0, z); scene.add(g);
+  const body = new THREE.Mesh(new RoundedBoxGeometry(w, h, d, 4, 0.12), mat(bodyColor));
+  body.position.y = h / 2 + 0.06; body.castShadow = true; body.receiveShadow = true; g.add(body);
+  const ledMat = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: COLORS.ok, emissiveIntensity: 2.2 });
+  const leds = [];
+  const rows = Math.max(1, Math.floor(h / 0.7));
+  for (let i = 0; i < rows; i++) {
+    const l = new THREE.Mesh(new THREE.BoxGeometry(w * 0.62, 0.05, 0.02), ledMat);
+    l.position.set(0, 0.06 + h * (i + 0.6) / (rows + 0.4), d / 2 + 0.005); g.add(l); leds.push(l);
+  }
+  const gl = glow(COLORS.ok, Math.max(w, h) * 1.4); gl.position.set(0, h * 0.55, d / 2 + 0.3); gl.material.opacity = 0.25; g.add(gl);
+  const halo = new THREE.Mesh(new THREE.RingGeometry(Math.max(w, d) * 0.85, Math.max(w, d) * 0.85 + 0.09, 72),
+    new THREE.MeshBasicMaterial({ color: COLORS.crit, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }));
+  halo.rotation.x = -Math.PI / 2; halo.position.y = 0.08; g.add(halo);
+  const lb = label(""); lb.position.set(0, h + 0.55, 0); g.add(lb);
+  return { g, body, ledMat, gl, halo, lb, h, w, d, name, top: new THREE.Vector3(x, h + 0.1, z), port: new THREE.Vector3(x, Math.min(h, 0.9) * 0.5 + 0.06, z) };
+}
+const minor = (o) => { o.element.dataset.minor = "1"; return o; };
+const U = {
+  bitcoind: unit("bitcoind", 1.8, 2.8, 1.8, -3.6, 0.8, 0x23272e),
+  exporter: unit("exporter", 0.9, 0.55, 0.9, -3.6, 4.3, 0x2a2e36),
+  electrs: unit("electrs", 2.3, 1.8, 1.8, 1.9, 0.8, 0x262a31),
+  prometheus: unit("Prometheus", 1.6, 1.25, 1.4, 7.0, -4.7, 0x30323a),
+  alertmanager: unit("Alertmanager", 1.6, 1.0, 1.4, 9.8, -4.7, 0x30323a),
+};
+[U.exporter.lb, U.alertmanager.lb].forEach(minor);
+// Prometheus beacon.
+const beacon = glow(COLORS.ok, 1.6); beacon.position.set(0, 1.75, 0); U.prometheus.g.add(beacon);
+const beaconCore = new THREE.Mesh(new THREE.SphereGeometry(0.13, 24, 16), new THREE.MeshBasicMaterial({ color: COLORS.ok }));
+beaconCore.position.set(0, 1.5, 0); U.prometheus.g.add(beaconCore);
+
+// On-call laptop.
+const oncall = new THREE.Group(); oncall.position.set(12.6, 0, -1.7); scene.add(oncall);
+const lapBase = new THREE.Mesh(new RoundedBoxGeometry(1.7, 0.09, 1.15, 2, 0.04), mat(0x8a8f99, { metalness: 0.6, roughness: 0.35 }));
+lapBase.position.y = 0.1; lapBase.castShadow = true; oncall.add(lapBase);
+const screenMat = new THREE.MeshStandardMaterial({ color: 0x0a0c10, emissive: 0x1d2a44, emissiveIntensity: 1.2 });
+const lapScreen = new THREE.Mesh(new RoundedBoxGeometry(1.7, 1.1, 0.06, 2, 0.03), [mat(0x8a8f99, { metalness: 0.6, roughness: 0.35 }), mat(0x8a8f99), mat(0x8a8f99), mat(0x8a8f99), screenMat, mat(0x8a8f99)]);
+lapScreen.position.set(0, 0.68, -0.55); lapScreen.rotation.x = -0.18; lapScreen.castShadow = true; oncall.add(lapScreen);
+const lapGlow = glow(0x5aa2ff, 2.6); lapGlow.position.set(0, 0.7, -0.3); lapGlow.material.opacity = 0.15; oncall.add(lapGlow);
+const ripple = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.0, 72), new THREE.MeshBasicMaterial({ color: COLORS.crit, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }));
+ripple.rotation.x = -Math.PI / 2; ripple.position.y = 0.09; oncall.add(ripple);
+const onLbl = label(""); onLbl.position.set(0, 1.75, -0.4); oncall.add(onLbl);
+const ONCALL = new THREE.Vector3(12.6, 0.5, -1.7);
+
+// Memory column for electrs.
+const memG = new THREE.Group(); memG.position.set(4.6, 0, 2.4); scene.add(memG);
+const memH = 2.6;
+const glass = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, memH, 40, 1, true),
+  new THREE.MeshStandardMaterial({ color: 0xaab4c8, transparent: true, opacity: 0.16, roughness: 0.1, metalness: 0, side: THREE.DoubleSide, depthWrite: false }));
+glass.position.y = memH / 2 + 0.06; memG.add(glass);
+const memFillMat = new THREE.MeshStandardMaterial({ color: 0x5aa2ff, emissive: 0x2a5fb0, emissiveIntensity: 0.6, roughness: 0.4 });
+const memFill = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 1, 40), memFillMat);
+memFill.position.y = 0.56; memG.add(memFill);
+const limitRing = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.03, 10, 48), new THREE.MeshBasicMaterial({ color: COLORS.crit }));
+limitRing.rotation.x = Math.PI / 2; limitRing.visible = false; memG.add(limitRing);
+const memLbl = minor(label("")); memLbl.position.set(0.55, memH * 0.55, 0); memLbl.center.set(0, 0.5); memG.add(memLbl);
+
+// Peers ring.
+const peers = [];
+for (let i = 0; i < 10; i++) {
+  const a = (i / 10) * Math.PI * 2 + 0.3;
+  const p = new THREE.Vector3(-10.2 + Math.cos(a) * 2.5, 0.42, 0 + Math.sin(a) * 4.6);
+  const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.3, 1), mat(0x7a8494, { flatShading: true }));
+  m.position.copy(p); m.castShadow = true; scene.add(m);
+  const dotMat = new THREE.MeshBasicMaterial({ color: COLORS.accent });
+  const dot = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 8), dotMat); dot.position.copy(p).add(new THREE.Vector3(0, 0.38, 0)); scene.add(dot);
+  peers.push({ m, dot, p });
+}
+const netLbl = minor(label("<b>Peers</b><span>testnet4</span>")); netLbl.position.set(-10.2, 1.6, 0); scene.add(netLbl);
+
+// Wallets and apps.
+const clients = [];
+for (let i = 0; i < 4; i++) {
+  const g = new THREE.Group(); g.position.set(7.6 + i * 1.6, 0, 3.6); scene.add(g);
+  const ph = new THREE.Mesh(new RoundedBoxGeometry(0.62, 1.1, 0.1, 2, 0.05), mat(0x1c1f25));
+  ph.position.y = 0.62; ph.rotation.x = -0.22; ph.castShadow = true; g.add(ph);
+  const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.9), new THREE.MeshBasicMaterial({ color: 0x24324a }));
+  scr.position.set(0, 0.63, 0.06); scr.rotation.x = -0.22; g.add(scr);
+  clients.push({ g, scr, port: new THREE.Vector3(7.6 + i * 1.6, 0.6, 3.6) });
+}
+const cliLbl = minor(label("<b>Wallets</b><span>REST and Electrum</span>")); cliLbl.position.set(10, 1.9, 3.6); scene.add(cliLbl);
+
+// Chain of blocks along the back of the node.
+const chainG = new THREE.Group(); scene.add(chainG);
+const chainLbl = minor(label("")); chainLbl.position.set(-6.4, 1.25, -4.4); chainLbl.center.set(0, 1); scene.add(chainLbl);
+const blockGeo = new RoundedBoxGeometry(0.56, 0.56, 0.56, 2, 0.07);
+const blockMat = mat(0xd38a2c, { roughness: 0.4, metalness: 0.35, emissive: 0x3a2205, emissiveIntensity: 0.4 });
+const badMat = mat(0x7a1f1c, { roughness: 0.5, emissive: 0xff3b30, emissiveIntensity: 0.6 });
+let chainKey = "";
+function setChain(h, invalid) {
+  const key = h + ":" + invalid;
+  if (key === chainKey || h == null) return;
+  chainKey = key;
+  chainG.clear();
+  const n = 9;
+  for (let i = 0; i < n; i++) {
+    const b = new THREE.Mesh(blockGeo, blockMat); b.castShadow = true;
+    b.position.set(-5.6 + i * 0.86, 0.36, -4.4); chainG.add(b);
+    if (i < n - 1) {
+      const l = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.3, 8), mat(0x6b5a40));
+      l.rotation.z = Math.PI / 2; l.position.set(-5.6 + i * 0.86 + 0.43, 0.36, -4.4); chainG.add(l);
+    }
+  }
+  const extra = invalid && invalid > h ? Math.min(3, invalid - h) : 0;
+  for (let j = 0; j < extra; j++) {
+    const b = new THREE.Mesh(blockGeo, badMat);
+    b.position.set(-5.6 + (n + j) * 0.86 + 0.25, 0.62 + j * 0.12, -4.4); b.rotation.z = -0.18 - j * 0.05; chainG.add(b);
+    const x = glow(COLORS.crit, 1.3); x.position.copy(b.position); chainG.add(x);
+  }
+  chainLbl.element.className = "lbl minor" + (extra ? " crit" : "");
+  chainLbl.element.innerHTML = `<b>Chain tip ${num(h)}</b><span>${extra ? "rejected block " + num(invalid) + " the network builds on" : "following the network"}</span>`;
+}
+
+// Cables with packets.
+const packetGeo = new THREE.SphereGeometry(0.075, 12, 8);
+const pmats = {};
+const pmat = (c) => pmats[c] || (pmats[c] = new THREE.MeshBasicMaterial({ color: c }));
+class Cable {
+  constructor(a, b, o = {}) {
+    const mid = a.clone().lerp(b, 0.5); mid.y += o.lift ?? a.distanceTo(b) * 0.18 + 0.3;
+    this.curve = new THREE.QuadraticBezierCurve3(a.clone(), mid, b.clone());
+    this.len = this.curve.getLength();
+    this.mat = new THREE.MeshBasicMaterial({ color: o.color ?? COLORS.cable, transparent: true, opacity: 0.85 });
+    this.mesh = new THREE.Mesh(new THREE.TubeGeometry(this.curve, 48, o.r ?? 0.028, 6, false), this.mat);
+    scene.add(this.mesh);
+    this.packets = []; this.acc = Math.random(); this.rate = 0; this.color = COLORS.ok; this.speed = o.speed ?? 3.2; this.reverse = !!o.reverse;
+    this.bad = 0;
+  }
+  set(rate, color, cableColor, opacity = 0.85, bad = 0) {
+    this.rate = rate; this.color = color; this.bad = bad;
+    this.mat.color.setHex(cableColor ?? COLORS.cable); this.mat.opacity = opacity;
+  }
+  tick(dt) {
+    if (this.rate > 0 && !reduceMotion) {
+      this.acc += dt * this.rate;
+      while (this.acc >= 1 && this.packets.length < 24) {
+        this.acc -= 1;
+        const m = new THREE.Mesh(packetGeo, pmat(Math.random() < this.bad ? COLORS.crit : this.color));
+        scene.add(m); this.packets.push({ m, u: 0 });
+      }
+    }
+    for (let i = this.packets.length - 1; i >= 0; i--) {
+      const p = this.packets[i];
+      p.u += (dt * this.speed) / this.len;
+      if (p.u >= 1) { scene.remove(p.m); this.packets.splice(i, 1); continue; }
+      p.m.position.copy(this.curve.getPoint(this.reverse ? 1 - p.u : p.u));
+    }
+  }
+  clear() { this.packets.forEach((p) => scene.remove(p.m)); this.packets = []; }
+}
+const v = (x, y, z) => new THREE.Vector3(x, y, z);
+const L = {
+  p2p: peers.map((p) => new Cable(p.p, v(-4.5, 0.5, 0.8), { lift: 0.6, speed: 2.4 })),
+  exporter: new Cable(v(-3.6, 0.35, 3.85), v(-3.6, 0.6, 1.7), { lift: 0.3 }),
+  rpc: new Cable(v(-2.7, 1.2, 0.8), v(0.75, 0.9, 0.8), { lift: 0.9, r: 0.045 }),
+  clients: clients.map((c) => new Cable(c.port, v(3.0, 0.8, 1.2), { lift: 1.0, reverse: false })),
+  scrapeExp: new Cable(v(-3.6, 0.5, 4.3), v(6.2, 0.7, -4.7), { lift: 3.4, r: 0.02, speed: 4.5 }),
+  scrapeEl: new Cable(v(1.9, 1.9, 0.8), v(6.4, 1.0, -4.7), { lift: 2.2, r: 0.02, speed: 4.5 }),
+  am: new Cable(v(7.8, 0.7, -4.7), v(9.0, 0.6, -4.7), { lift: 0.5, r: 0.03 }),
+  page: new Cable(v(10.6, 0.6, -4.5), v(12.2, 0.4, -2.0), { lift: 0.5, r: 0.03 }),
+};
+const allCables = [...L.p2p, ...L.clients, L.exporter, L.rpc, L.scrapeExp, L.scrapeEl, L.am, L.page];
+const cutLbl = label("scrape job removed", "cut"); cutLbl.position.copy(L.scrapeExp.curve.getPoint(0.5)); cutLbl.visible = false; scene.add(cutLbl);
+
+// The fix: a beam from the on-call laptop to the part of the lab being fixed.
+const beamMat = new THREE.MeshBasicMaterial({ color: COLORS.accent, transparent: true, opacity: 0 });
+let beam = null;
+function setBeam(target, on, k) {
+  if (beam && beam.userData.target !== target) { scene.remove(beam); beam = null; }
+  if (!beam && target) {
+    const to = target === "prometheus" ? v(7.0, 1.4, -4.7) : U[target].top.clone();
+    const c = new THREE.QuadraticBezierCurve3(ONCALL.clone().add(v(0, 1.0, 0)), ONCALL.clone().lerp(to, 0.5).add(v(0, 4.5, 0)), to);
+    beam = new THREE.Mesh(new THREE.TubeGeometry(c, 64, 0.05, 8, false), beamMat); beam.userData.target = target; scene.add(beam);
+  }
+  beamMat.opacity = on ? 0.35 + 0.5 * k : 0;
+}
+
+// ------------------------------------------------------------------ state from the recording
+let cur = null, t = 0, playing = false, lastNow = 0, speed = 60;
+const memo = { blocks: null, peers: null, tip: null };
+function sampleAt(tt) {
+  const S = cur.run.samples; let lo = 0, hi = S.length - 1, r = S[0];
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (S[mid].t <= tt) { r = S[mid]; lo = mid + 1; } else hi = mid - 1; }
+  return r || { t: 0, m: {} };
+}
+function alertsAt(tt) { let st = { pending: [], firing: [], inhibited: [] }; for (const a of cur.run.alerts) { if (a.t <= tt) st = a; else break; } return st; }
+const unitOf = (n) => n.startsWith("Electrs") ? "electrs" : (n.startsWith("Bitcoind") || n.startsWith("BitcoinNode")) ? "bitcoind" : null;
+function setLabel(o, title, line, cls = "") { o.element.className = "lbl " + cls + (o.element.dataset.minor ? " minor" : ""); o.element.innerHTML = `<b>${esc(title)}</b><span>${esc(line)}</span>`; }
+function led(u, color, intensity = 2.2) { u.ledMat.emissive.setHex(color); u.ledMat.emissiveIntensity = intensity; u.gl.material.color.setHex(color); }
+
+let pulse = 0;
+function applyState(now) {
+  if (!cur) return;
+  const m = sampleAt(t).m, al = alertsAt(t), id = cur.id;
+  const blink = 0.5 + 0.5 * Math.sin(now / 160);
+  const throb = 0.5 + 0.5 * Math.sin(now / 420);
+
+  // bitcoind
+  const gapCut = id === "monitoring-gap" && t >= cur.a.inject && (!cur.a.action || t < cur.a.action.t + 8);
+  let bs;
+  if (m.exporter_scraped == null) bs = "unseen";
+  else if (m.bitcoind_up === 1) bs = "ok";
+  else if (m.warmup === 1) bs = "warm";
+  else bs = "down";
+  if (m.blocks != null) memo.blocks = m.blocks;
+  if (m.peers != null) memo.peers = m.peers;
+  const peersN = bs === "ok" ? (m.peers ?? 0) : bs === "unseen" ? (memo.peers ?? 10) : 0;
+  if (bs === "ok") { led(U.bitcoind, COLORS.ok); U.bitcoind.gl.material.opacity = 0.22; }
+  else if (bs === "warm") { led(U.bitcoind, COLORS.warn, 1 + 2 * throb); U.bitcoind.gl.material.opacity = 0.2 + 0.3 * throb; }
+  else if (bs === "down") { led(U.bitcoind, COLORS.crit, 0.4 + 2.2 * blink); U.bitcoind.gl.material.opacity = 0.15 + 0.35 * blink; }
+  else { led(U.bitcoind, COLORS.ok, 1.6); U.bitcoind.gl.material.opacity = 0.12; }
+  const bLine = bs === "ok" ? `height ${num(m.blocks)} · ${num(m.peers)} ${m.peers === 1 ? "peer" : "peers"}` : bs === "warm" ? "warming up · RPC answers -28"
+    : bs === "down" ? "not answering RPC" : "running · Prometheus can't see it";
+  setLabel(U.bitcoind.lb, "bitcoind", bLine, bs === "down" ? "crit" : bs === "warm" ? "warn" : bs === "unseen" ? "quiet" : "");
+  setChain(memo.blocks, m.invalid_tip);
+
+  // peers
+  peers.forEach((p, i) => {
+    const on = i < Math.min(10, peersN);
+    p.m.material.color.setHex(on ? 0x7a8494 : 0x30343b);
+    p.dot.material.color.setHex(on ? COLORS.accent : 0x3a3d44);
+    L.p2p[i].set(on ? 0.35 : 0, COLORS.accent, on ? 0x7a6a4a : 0x34373e, on ? 0.85 : 0.35);
+  });
+  // With RPC failing there is no peer count; say so rather than draw zero.
+  setLabel(netLbl, "Peers", bs === "down" || bs === "warm" ? "no data while RPC fails" : peersN === 0 ? "no connections" : `${num(peersN)} connected`,
+    peersN === 0 && bs === "ok" ? "crit" : bs === "down" || bs === "warm" ? "quiet" : "");
+
+  // exporter
+  const expOk = !gapCut && m.exporter_scraped === 1;
+  led(U.exporter, gapCut ? COLORS.idle : bs === "ok" ? COLORS.ok : bs === "warm" ? COLORS.warn : bs === "down" ? COLORS.crit : COLORS.idle, 1.8);
+  setLabel(U.exporter.lb, "exporter", gapCut ? (m.exporter_scraped === 1 ? "not scraped · last sample still counts" : "not scraped · series gone") : "scraped every 15s", gapCut ? "warn" : "");
+  L.exporter.set(bs === "ok" || bs === "unseen" ? 1.2 : 0.6, bs === "ok" || bs === "unseen" ? COLORS.ok : COLORS.crit, COLORS.cable, 0.85, bs === "down" ? 1 : bs === "warm" ? 0.5 : 0);
+
+  // electrs
+  const es = m.electrs_scraped === 1 ? "ok" : "down";
+  if (es === "ok") { led(U.electrs, COLORS.ok); U.electrs.gl.material.opacity = 0.22; }
+  else { led(U.electrs, COLORS.crit, 0.4 + 2.2 * blink); U.electrs.gl.material.opacity = 0.15 + 0.35 * blink; }
+  const lag = m.blocks != null && m.electrs_tip != null ? m.blocks - m.electrs_tip : 0;
+  setLabel(U.electrs.lb, "electrs", es === "ok" ? `tip ${num(m.electrs_tip)}${lag > 0 ? " · " + lag + " behind" : ""}` : "down · not serving", es === "down" ? "crit" : "");
+
+  // RPC between electrs and bitcoind
+  const busy = (m.rpc_busy_15m || 0) > 0.5;
+  const rpcRate = bs === "ok" && es === "ok" ? (id === "rpc-overload" && t > cur.a.inject && (!cur.a.action || t < cur.a.action.t) ? 5 : 1.4) : es === "ok" ? 0.5 : 0;
+  L.rpc.set(rpcRate, busy ? COLORS.warn : COLORS.ok, busy ? 0x5a4520 : COLORS.cable, 0.9, bs === "ok" ? (busy ? 0.35 : 0) : 1);
+
+  // memory column
+  const lim = MEM_LIMIT[id];
+  const rss = m.electrs_rss;
+  const top = Math.max(lim ? lim * 1.35 : 0, 1.6 * 1073741824);
+  const frac = rss != null ? Math.min(1, rss / top) : 0.001;
+  memFill.scale.y = Math.max(0.001, frac * (memH - 0.1)); memFill.position.y = 0.06 + memFill.scale.y / 2;
+  const near = lim && rss != null && rss > lim * 0.85;
+  memFillMat.color.setHex(near ? COLORS.crit : 0x5aa2ff); memFillMat.emissive.setHex(near ? 0x6a1410 : 0x2a5fb0);
+  limitRing.visible = !!lim; if (lim) limitRing.position.y = 0.06 + (lim / top) * (memH - 0.1);
+  setLabel(memLbl, "electrs memory", rss != null ? `${Math.round(rss / 1048576)} MiB${lim ? " · limit " + Math.round(lim / 1048576) + " MiB" : ""}` : (lim ? "process killed" : "no data"), near || (lim && rss == null) ? "crit" : "");
+
+  // clients
+  const err = m.rest_errors_5m || 0;
+  const bad = Math.min(1, err * 4);
+  clients.forEach((c, i) => {
+    c.scr.material.color.setHex(es === "ok" ? (bad > 0.25 ? 0x4a2020 : 0x24324a) : 0x2a1616);
+    L.clients[i].set(es === "ok" ? 1.0 : 0.35, COLORS.info, COLORS.cable, 0.8, es === "ok" ? bad : 1);
+  });
+  setLabel(cliLbl, "Wallets", es !== "ok" ? "requests failing" : err > 0.005 ? `${(err * 100).toFixed(1)}% of REST requests failing` : "REST and Electrum", es !== "ok" || err > 0.02 ? "crit" : "");
+
+  // scrapes
+  L.scrapeExp.set(gapCut ? 0 : 0.8, COLORS.ok, gapCut ? 0x5a2422 : 0x2f3d34, gapCut ? 0.5 : 0.7);
+  cutLbl.visible = gapCut;
+  L.scrapeEl.set(es === "ok" ? 0.8 : 0, COLORS.ok, es === "ok" ? 0x2f3d34 : 0x5a2422, 0.7);
+  L.scrapeExp.reverse = true; L.scrapeEl.reverse = false;
+
+  // alerts on units
+  const worst = {};
+  const rank = { firing: 3, pending: 2, inhibited: 1 };
+  for (const k of ["inhibited", "pending", "firing"]) for (const n of al[k]) {
+    const u = unitOf(n); if (u && (!worst[u] || rank[k] > rank[worst[u]])) worst[u] = k;
+  }
+  for (const u of ["bitcoind", "electrs"]) {
+    const h = U[u].halo, s = worst[u];
+    h.material.color.setHex(s === "firing" ? COLORS.crit : s === "pending" ? COLORS.warn : 0x8b8980);
+    h.material.opacity = s === "firing" ? 0.45 + 0.5 * throb : s === "pending" ? 0.6 : s === "inhibited" ? 0.35 : 0;
+  }
+  const anyF = al.firing.length, anyP = al.pending.length;
+  const bc = anyF ? COLORS.crit : anyP ? COLORS.warn : COLORS.ok;
+  beacon.material.color.setHex(bc); beaconCore.material.color.setHex(bc);
+  beacon.material.opacity = anyF ? 0.5 + 0.5 * blink : 0.55;
+  setLabel(U.prometheus.lb, "Prometheus", anyF ? `${anyF} alert${anyF > 1 ? "s" : ""} firing` : anyP ? `${anyP} pending` : "rules quiet", anyF ? "crit" : anyP ? "warn" : "");
+  L.am.set(anyF ? 1.2 : 0, COLORS.crit, anyF ? 0x5a2422 : COLORS.cable, 0.85);
+  led(U.prometheus, COLORS.ok, 1.2); led(U.alertmanager, al.inhibited.length ? 0x9aa0aa : COLORS.ok, 1.2);
+  U.alertmanager.halo.material.color.setHex(0xb9b7af);
+  U.alertmanager.halo.material.opacity = al.inhibited.length ? 0.4 : 0;
+  setLabel(U.alertmanager.lb, "Alertmanager", al.inhibited.length ? `holding back ${al.inhibited.length}` : anyF ? "routing" : "idle", "");
+
+  // notifications and on-call
+  const notes = cur.run.notifications.filter((n) => n.t <= t);
+  const lastN = notes[notes.length - 1];
+  const age = lastN ? t - lastN.t : 1e9;
+  const firingPage = notes.some((n) => n.status === "firing" && n.receiver === "page") &&
+    !(cur.a.clear && t >= cur.a.clear.t);
+  const nc = !lastN ? 0x5aa2ff : lastN.status === "resolved" ? COLORS.ok : lastN.receiver === "page" ? COLORS.crit : COLORS.info;
+  L.page.set(age < 25 ? 2 : 0, nc, age < 25 ? 0x5a2422 : COLORS.cable, 0.85);
+  screenMat.emissive.setHex(firingPage && age < 400 ? COLORS.crit : lastN ? nc : 0x1d2a44);
+  screenMat.emissiveIntensity = firingPage ? 0.6 + 1.2 * blink : 1.0;
+  lapGlow.material.color.setHex(nc); lapGlow.material.opacity = age < 60 ? 0.6 : firingPage ? 0.3 : 0.12;
+  pulse = age < 40 ? (now / 900) % 1 : 0;
+  ripple.material.color.setHex(nc); ripple.material.opacity = age < 40 ? (1 - pulse) * 0.7 : 0;
+  ripple.scale.setScalar(1 + pulse * 1.6);
+  const acked = cur.run.events.find((e) => e.kind === "ack" && e.t <= t);
+  setLabel(onLbl, "On-call", !lastN ? "no page" : firingPage ? (acked ? "acked · following the runbook" : "paged") : lastN.status === "resolved" ? "resolved" : "ticket opened",
+    firingPage ? "crit" : "");
+
+  // the fix
+  const act = cur.a.action;
+  const since = act ? t - act.t : -1;
+  setBeam(TARGET[id], act && since >= 0 && since < 75, Math.max(0, 1 - since / 75));
+}
+
+// ------------------------------------------------------------------ HUD, timeline, alerts, charts
+function renderHUD() {
+  $("clock").textContent = "T+" + fmt(t);
+  const f = cur.a.end ? t / cur.a.end : 0;
+  $("fill").style.width = (f * 100) + "%"; $("knob").style.left = (f * 100) + "%";
+  $("scrub").value = String(Math.round(f * 1000));
+  const past = cur.a.items.filter((i) => i.t <= t && i.k !== "seen" && i.k !== "note");
+  const lastItem = past[past.length - 1];
+  $("h-now").textContent = lastItem ? lastItem.text.charAt(0).toUpperCase() + lastItem.text.slice(1) : "Baseline: a healthy node, every alert quiet.";
+  // toasts
+  const recent = cur.run.notifications.filter((n) => n.t <= t && t - n.t < 150).slice(-3).reverse();
+  const key = recent.map((n) => n.t + n.receiver + n.status).join("|");
+  if (key !== $("toasts").dataset.k) {
+    $("toasts").dataset.k = key;
+    $("toasts").innerHTML = recent.map((n) => {
+      const c = n.status === "resolved" ? "var(--ok)" : n.receiver === "page" ? "var(--crit)" : "var(--info)";
+      const h = n.status === "resolved" ? "Resolved" : n.receiver === "page" ? "Page" : "Ticket";
+      return `<div class="toast" style="--c:${c}"><div class="h">${h}<span>T+${fmt(n.t)}</span></div><div class="b">${esc([...new Set(n.alerts.map((a) => a.alertname))].join(", "))}</div></div>`;
+    }).join("");
+  }
+  // feed
+  let lastLi = null;
+  for (const li of $("feed").children) { const fut = +li.dataset.t > t; li.classList.toggle("future", fut); if (!fut) lastLi = li; }
+  if (playing && lastLi) { const fd = $("feed"); const want = lastLi.offsetTop - fd.offsetTop - fd.clientHeight / 2; if (Math.abs(fd.scrollTop - want) > 4) fd.scrollTop = want; }
+  // alert table
+  const st = alertsAt(t), rows = [];
+  for (const [n, since] of cur.a.names) {
+    if (since > t) continue;
+    let s = "resolved", l = "resolved";
+    if (st.inhibited.includes(n)) { s = "inhibited"; l = "held back"; } else if (st.firing.includes(n)) { s = "firing"; l = "firing"; } else if (st.pending.includes(n)) { s = "pending"; l = "pending"; }
+    rows.push(`<tr><td class="nm">${esc(n)}<span class="sv">${esc((cur.severity || {})[n] || "")}</span></td><td style="text-align:right"><span class="chip ${s}">${l}</span></td></tr>`);
+  }
+  const html = rows.join("");
+  if ($("alerts").innerHTML !== html) $("alerts").innerHTML = html;
+  $("alerts-empty").style.display = rows.length ? "none" : "block";
+  for (const c of $("charts").children) c._update && c._update(t);
+}
+
+let CW = 480;
+const CH = 96, PL = 46, PR = 6, PT = 6, PB = 18;
+function fmtVal(c, val) {
+  if (val == null) return "no data";
+  if (c.kind === "state") return val >= 1 ? "yes" : "no";
+  if (c.unit === "pct") return (val * 100).toFixed(val < 0.01 ? 2 : 1) + "%";
+  if (c.unit === "bytes") return Math.round(val / 1048576) + " MiB";
+  return Number.isInteger(val) ? val.toLocaleString("en-US") : val.toFixed(1);
+}
+function buildCharts() {
+  const host = $("charts"); host.innerHTML = "";
+  CW = Math.max(260, Math.round(host.clientWidth || 480));
+  const S = cur.run.samples, end = cur.a.end || 1;
+  const x = (tt) => PL + (tt / end) * (CW - PL - PR);
+  cur.charts.forEach((c, ci) => {
+    const vals = S.map((s) => s.m[c.key]).filter((q) => q != null);
+    let lo = c.kind === "state" ? 0 : Math.min(...vals), hi = c.kind === "state" ? 1 : Math.max(...vals);
+    if (!vals.length) { lo = 0; hi = 1; }
+    if (c.kind !== "state") { if (lo === hi) { if (lo === 0) hi = c.unit === "pct" ? 0.01 : 1; else { lo -= 1; hi += 1; } } if (c.unit === "pct" || c.unit === "bytes" || (lo >= 0 && lo < hi * 0.5)) lo = Math.min(0, lo); }
+    const y = (q) => PT + (1 - (q - lo) / (hi - lo)) * (CH - PT - PB);
+    let d = "", prev = null, gaps = "", gs = null;
+    S.forEach((s, k) => {
+      const q = s.m[c.key];
+      if (q == null) { prev = null; if (gs == null) gs = s.t; if (k === S.length - 1) gaps += `<rect x="${x(gs)}" y="${PT}" width="${Math.max(1, x(s.t) - x(gs))}" height="${CH - PT - PB}" fill="var(--line)" opacity=".7"/>`; return; }
+      if (gs != null) { gaps += `<rect x="${x(gs)}" y="${PT}" width="${Math.max(1, x(s.t) - x(gs))}" height="${CH - PT - PB}" fill="var(--line)" opacity=".7"/>`; gs = null; }
+      d += prev == null ? `M${x(s.t).toFixed(1)},${y(q).toFixed(1)}` : `H${x(s.t).toFixed(1)}V${y(q).toFixed(1)}`;
+      prev = q;
+    });
+    const marks = cur.a.moments.map((mm) => `<line x1="${x(mm.t)}" x2="${x(mm.t)}" y1="${PT}" y2="${CH - PB}" stroke="${mm.c}" stroke-opacity=".55" stroke-dasharray="2 3"/>`).join("");
+    const yl = c.kind === "state" ? ["yes", "no"] : [fmtVal(c, hi), fmtVal(c, lo)];
+    const div = document.createElement("div"); div.className = "chart";
+    div.innerHTML = `<div class="ct">${esc(c.label)}</div>
+      <svg viewBox="0 0 ${CW} ${CH}" width="${CW}" height="${CH}" role="img" aria-label="${esc(c.label)} over the drill">
+        <line x1="${PL}" x2="${CW - PR}" y1="${y(lo)}" y2="${y(lo)}" stroke="var(--line-2)"/>
+        <line x1="${PL}" x2="${CW - PR}" y1="${y(hi)}" y2="${y(hi)}" stroke="var(--line)"/>
+        <text class="ax" x="${PL - 6}" y="${y(hi) + 4}" text-anchor="end">${esc(yl[0])}</text>
+        <text class="ax" x="${PL - 6}" y="${y(lo) + 4}" text-anchor="end">${esc(yl[1])}</text>
+        <text class="ax" x="${PL}" y="${CH - 3}">00:00</text><text class="ax" x="${CW - PR}" y="${CH - 3}" text-anchor="end">${fmt(end)}</text>
+        <defs><clipPath id="cc${ci}"><rect class="clip" x="0" y="0" width="${PL}" height="${CH}"/></clipPath></defs>
+        <g clip-path="url(#cc${ci})">${gaps}<path d="${d}" fill="none" stroke="var(--info)" stroke-width="2" stroke-linejoin="round"/></g>
+        ${marks}
+        <line class="cur" x1="${PL}" x2="${PL}" y1="${PT}" y2="${CH - PB}" stroke="var(--ink)" stroke-opacity=".6"/>
+      </svg><div class="tip"></div>`;
+    host.appendChild(div);
+    const svg = div.querySelector("svg"), tip = div.querySelector(".tip");
+    div._update = (now) => { const xx = x(Math.min(now, end)); div.querySelector(".clip").setAttribute("width", xx); const l = div.querySelector(".cur"); l.setAttribute("x1", xx); l.setAttribute("x2", xx); };
+    svg.addEventListener("mousemove", (e) => {
+      const r = svg.getBoundingClientRect(), px = ((e.clientX - r.left) / r.width) * CW;
+      const tt = Math.max(0, Math.min(t, ((px - PL) / (CW - PL - PR)) * end));
+      let s = null; for (const q of S) { if (q.t <= tt) s = q; else break; }
+      if (!s) { tip.style.display = "none"; return; }
+      tip.style.display = "block"; tip.style.left = (x(s.t) / CW) * r.width + "px"; tip.style.top = "26px";
+      tip.textContent = "T+" + fmt(s.t) + " · " + fmtVal(c, s.m[c.key]);
+    });
+    svg.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+  });
+}
+
+// ------------------------------------------------------------------ selection and transport
+const PLAY = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l9.5-5.5z"/></svg>';
+const PAUSE = '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="2.5" width="3.6" height="11" rx="1"/><rect x="9.4" y="2.5" width="3.6" height="11" rx="1"/></svg>';
+function setPlaying(p) { playing = p; $("play").innerHTML = p ? PAUSE : PLAY; $("play").setAttribute("aria-label", p ? "Pause" : "Play"); }
+
+DATA.forEach((sc, i) => {
+  const b = document.createElement("button");
+  b.className = "pick"; b.type = "button"; b.setAttribute("role", "tab");
+  b.innerHTML = `<span class="n">${i + 1}</span>${esc(sc.title)}`;
+  b.addEventListener("click", () => select(i));
+  $("picker").appendChild(b);
+});
+
+function select(i) {
+  cur = DATA[i];
+  [...$("picker").children].forEach((c, j) => c.setAttribute("aria-selected", String(i === j)));
+  $("h-kicker").textContent = `Drill ${i + 1} of ${DATA.length} · based on ${cur.incidents[0].name}`;
+  $("h-title").textContent = cur.title;
+  $("total").textContent = "of " + fmt(cur.a.end);
+  $("ticks").innerHTML = cur.a.moments.map((mm) => `<div class="tick" style="left:${(mm.t / cur.a.end) * 100}%;--c:${mm.c}"><span>${esc(mm.label)}</span></div>`).join("");
+  $("feed").innerHTML = cur.a.items.map((it) => `<li data-t="${it.t}"><span class="t">${fmt(it.t)}</span><span class="k ${it.k}">${esc(it.k)}</span><span>${esc(it.text)}</span></li>`).join("");
+  $("tl-count").textContent = cur.a.items.length + " events";
+  $("r-title").textContent = cur.incidents[0].name;
+  $("r-fault").innerHTML = "Simulated on the lab with: <code>" + esc(cur.fault) + "</code>";
+  $("incidents").innerHTML = cur.incidents.map((x) => `<article class="incident"><div class="date">${esc(x.date)}</div><h5>${esc(x.name)}</h5><p>${esc(x.summary)}</p>
+    <a href="${esc(x.url)}" target="_blank" rel="noopener">Read the full story <span aria-hidden="true">↗</span></a></article>`).join("");
+  allCables.forEach((c) => c.clear()); chainKey = ""; memo.blocks = memo.peers = null;
+  t = 0; setPlaying(false);
+  buildCharts(); renderHUD(); applyState(performance.now());
+  try { history.replaceState(null, "", "#" + cur.id); } catch (e) {}
+}
+
+$("play").addEventListener("click", () => {
+  if (playing) { setPlaying(false); return; }
+  if (t >= cur.a.end) t = 0;
+  setPlaying(true); lastNow = performance.now();
+});
+$("scrub").addEventListener("input", (e) => { t = (+e.target.value / 1000) * cur.a.end; renderHUD(); });
+for (const b of $("speeds").children) b.addEventListener("click", () => {
+  speed = +b.dataset.s; for (const o of $("speeds").children) o.setAttribute("aria-pressed", String(o === b));
+});
+document.addEventListener("keydown", (e) => {
+  if (e.target.closest("input, button, a") && e.key !== " ") return;
+  if (e.key === " " && !e.target.closest("input")) { e.preventDefault(); $("play").click(); }
+});
+
+// Findings.
+$("findings").innerHTML = FINDINGS.map((f) => `<article class="finding"><h5>${esc(f.title)}</h5><p>${esc(f.text)}</p>${f.fix ? `<div class="fix"><b>${esc(f.label || "Fixed")}:</b> ${esc(f.fix)}</div>` : ""}</article>`).join("");
+if (!FINDINGS.length) $("found").hidden = true;
+
+// ------------------------------------------------------------------ render loop
+function resize() {
+  const w = stageEl.clientWidth, h = stageEl.clientHeight;
+  if (renderer) renderer.setSize(w, h, false);
+  labelR.setSize(w, h);
+  camera.aspect = w / h;
+  const far = w < 700 ? 1.75 : w < 1000 ? 1.32 : 1.18;
+  camera.position.set(1 + 16 * far, 17 * far, 22 * far);
+  camera.updateProjectionMatrix(); controls.update();
+}
+new ResizeObserver(() => { resize(); if (cur) { buildCharts(); renderHUD(); } }).observe(stageEl);
+let visible = true;
+new IntersectionObserver((es) => { visible = es[0].isIntersecting; }).observe(stageEl);
+let prevNow = performance.now();
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min(0.1, (now - prevNow) / 1000); prevNow = now;
+  if (playing && cur) {
+    t += ((now - lastNow) / 1000) * speed; lastNow = now;
+    if (t >= cur.a.end) { t = cur.a.end; setPlaying(false); }
+    renderHUD();
+  } else lastNow = now;
+  applyState(now);
+  if (!visible) return;
+  allCables.forEach((c) => c.tick(dt));
+  controls.update();
+  if (renderer) renderer.render(scene, camera);
+  labelR.render(scene, camera);
+}
+resize();
+if (DATA.length) {
+  const h = location.hash.slice(1);
+  select(Math.max(0, DATA.findIndex((d) => d.id === h)));
+  // ?t=SECONDS opens the replay at that moment, for links to a specific point.
+  const at = +new URLSearchParams(location.search).get("t");
+  if (at > 0) { t = Math.min(at, cur.a.end); renderHUD(); }
+}
+requestAnimationFrame(loop);
+window.__stage = { seek: (s) => { t = s; renderHUD(); }, play: () => $("play").click() };
+</script>
+</body>
+</html>

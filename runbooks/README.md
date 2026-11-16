@@ -12,6 +12,7 @@ likely causes, mitigation, and when to escalate.
 | [bitcoind-low-outbound-peers](bitcoind-low-outbound-peers.md) | `BitcoindLowOutboundPeers` |
 | [bitcoind-no-new-blocks](bitcoind-no-new-blocks.md) | `BitcoindNoNewBlocks`, `BitcoindBehindFleet` |
 | [bitcoind-no-peers](bitcoind-no-peers.md) | `BitcoindNoPeers` |
+| [bitcoind-rejected-chain-ahead](bitcoind-rejected-chain-ahead.md) | `BitcoindRejectedChainAhead` |
 | [bitcoind-restart-loop](bitcoind-restart-loop.md) | `BitcoindRestartLoop` |
 | [bitcoind-warnings](bitcoind-warnings.md) | `BitcoindWarnings` |
 | [electrs-bitcoind-rpc-errors](electrs-bitcoind-rpc-errors.md) | `ElectrsBitcoindRPCErrors` |
@@ -22,7 +23,7 @@ likely causes, mitigation, and when to escalate.
 | [electrs-index-behind](electrs-index-behind.md) | `ElectrsIndexBehind` |
 | [electrs-initial-sync-stalled](electrs-initial-sync-stalled.md) | `ElectrsInitialSyncStalled` |
 | [electrs-main-loop-stalled](electrs-main-loop-stalled.md) | `ElectrsMainLoopStalled` |
-| [electrs-memory-high](electrs-memory-high.md) | `ElectrsMemoryHigh`, `ElectrsContainerMemoryHigh` |
+| [electrs-memory-high](electrs-memory-high.md) | `ElectrsMemoryHigh`, `ElectrsContainerMemoryHigh`, `BitcoinNodeOOMKilled` |
 | [electrs-mempool-sync-failing](electrs-mempool-sync-failing.md) | `ElectrsMempoolSyncFailing` |
 | [electrs-rest-availability-slo](electrs-rest-availability-slo.md) | `ElectrsRESTAvailabilityBurnFast`, `ElectrsRESTAvailabilityBurnSlow` |
 | [electrs-rest-latency-slo](electrs-rest-latency-slo.md) | `ElectrsRESTLatencyBurnFast`, `ElectrsRESTLatencyBurnSlow` |

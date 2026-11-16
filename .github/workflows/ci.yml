@@ -10,6 +10,7 @@ permissions:
 
 env:
   PROMETHEUS_VERSION: "3.15.1"
+  ALERTMANAGER_VERSION: "0.28.1"
 
 jobs:
   check:
@@ -42,6 +43,17 @@ jobs:
 
       - name: Check example Prometheus config
         run: promtool check config --syntax-only examples/prometheus.yml
+
+      - name: Check Alertmanager routing
+        run: |
+          curl -sSLO "https://github.com/prometheus/alertmanager/releases/download/v${ALERTMANAGER_VERSION}/alertmanager-${ALERTMANAGER_VERSION}.linux-amd64.tar.gz"
+          curl -sSL "https://github.com/prometheus/alertmanager/releases/download/v${ALERTMANAGER_VERSION}/sha256sums.txt"             | grep "alertmanager-${ALERTMANAGER_VERSION}.linux-amd64.tar.gz" | sha256sum -c -
+          tar xzf "alertmanager-${ALERTMANAGER_VERSION}.linux-amd64.tar.gz"
+          AMTOOL="./alertmanager-${ALERTMANAGER_VERSION}.linux-amd64/amtool"
+          $AMTOOL check-config examples/alertmanager.yml
+          # critical pages, warning opens a ticket
+          $AMTOOL config routes test --config.file=examples/alertmanager.yml --verify.receivers=page severity=critical alertname=BitcoindDown
+          $AMTOOL config routes test --config.file=examples/alertmanager.yml --verify.receivers=ticket severity=warning alertname=BitcoindNoNewBlocks
 
       - name: Lint dashboard
         run: python3 scripts/lint_dashboard.py

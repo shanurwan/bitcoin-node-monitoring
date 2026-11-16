@@ -1,6 +1,6 @@
 # ElectrsMemoryHigh
 
-**Alerts:** `ElectrsMemoryHigh`, `ElectrsContainerMemoryHigh`  
+**Alerts:** `ElectrsMemoryHigh`, `ElectrsContainerMemoryHigh`, `BitcoinNodeOOMKilled`  
 **Severity:** warning
 
 `ElectrsMemoryHigh`: electrs's resident memory has been above 85% of `bitcoin_node:electrs_memory_budget_bytes` for
@@ -31,6 +31,20 @@ initial sync and compaction.
 - Raise the memory limit for the initial sync and compaction, then lower it for steady state.
 - `--cache-index-filter-blocks` moves index and filter blocks into the block cache, which bounds them by `--db-block-cache-mb`. With the default 24 MB cache the testnet4 file import ran about 6 times slower, so raise the cache size along with it.
 - If the budget is simply set too low for this host, change `bitcoin_node:electrs_memory_budget_bytes`.
+
+## OOM kills
+
+`BitcoinNodeOOMKilled` fires when the kernel killed a process for memory (`node_vmstat_oom_kill` on hosts), or
+when a bitcoind or electrs container restarted with `OOMKilled` (Kubernetes). It exists because a process killed
+within seconds of starting never answers a scrape: in the game day, electrs under a 300 MiB limit was killed
+31 times in 8 minutes, and the memory and restart-loop alerts never had a sample. Only `ElectrsDown` paged.
+
+1. Which process? `dmesg | grep -i "killed process"` or `journalctl -k | grep -i oom` on hosts;
+   `kubectl describe pod` (Last State: OOMKilled) on Kubernetes. `node_vmstat_oom_kill` counts the whole host,
+   so on a shared host check that it was bitcoind or electrs.
+2. Is it looping? Restart count (`systemctl show -p NRestarts`, or the pod's restart count) and `ElectrsDown`.
+3. Give it the memory it needs (limit, or `MemoryMax` in systemd), then use the mitigation above to bring the
+   steady-state footprint down if the limit has to stay small.
 
 ## Escalate when
 

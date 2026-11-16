@@ -101,6 +101,7 @@ class ExporterTest(unittest.TestCase):
         self.assertEqual(m["bitcoind_headers"], 870001)
         self.assertEqual(m['bitcoind_peers{direction="out"}'], 10)
         self.assertEqual(m['bitcoind_chain_tips{status="valid-fork"}'], 2)
+        self.assertEqual(m["bitcoind_invalid_tip_height"], 0)
         self.assertEqual(m["bitcoind_warnings"], 0)
         self.assertEqual(m["bitcoind_mempool_transactions"], 1234)
 
@@ -136,6 +137,21 @@ class ExporterTest(unittest.TestCase):
             return out
         self.node.reply = replies
         self.assertEqual(parse(self.exp.collect())["bitcoind_warnings"], 1)
+
+    def test_invalid_tip_height(self):
+        # The node rejected a block one above its own tip, as in the March 2013 split (BIP 50).
+        def replies(batch):
+            out = ok_replies(batch)
+            for r in out:
+                if batch[r["id"]]["method"] == "getchaintips":
+                    r["result"] = [{"status": "active", "height": 870000},
+                                   {"status": "invalid", "height": 869990},
+                                   {"status": "invalid", "height": 870001}]
+            return out
+        self.node.reply = replies
+        m = parse(self.exp.collect())
+        self.assertEqual(m['bitcoind_chain_tips{status="invalid"}'], 2)
+        self.assertEqual(m["bitcoind_invalid_tip_height"], 870001)
 
     def test_unexpected_reply_shape(self):
         self.node.reply = lambda batch: {"result": None, "error": {"code": -32700, "message": "parse error"}, "id": None}

@@ -1,0 +1,50 @@
+# Alertmanager routing for the bitcoin-node alerts.
+#
+# critical -> page (wake someone up), warning -> ticket (working hours).
+# The inhibit rules stop one fault from paging several times: when bitcoind is down,
+# electrs and the chain alerts on the same node are symptoms, not new incidents.
+# The game day (docs/game-day.md) ran with this file, with both webhooks pointed at a recorder.
+#
+# Replace the two webhook URLs with your paging and ticketing integrations
+# (Grafana IRM, PagerDuty, Opsgenie, a Slack channel for tickets, ...).
+
+route:
+  receiver: ticket
+  group_by: [alertname, node]
+  group_wait: 30s
+  group_interval: 2m
+  repeat_interval: 12h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: page
+      repeat_interval: 1h
+    - matchers: [severity="warning"]
+      receiver: ticket
+
+receivers:
+  - name: page
+    webhook_configs:
+      - url: http://127.0.0.1:19095/page
+        send_resolved: true
+  - name: ticket
+    webhook_configs:
+      - url: http://127.0.0.1:19095/ticket
+        send_resolved: true
+
+inhibit_rules:
+  # bitcoind down: everything downstream of it on the same node is a symptom.
+  - source_matchers: [alertname="BitcoindDown"]
+    target_matchers:
+      - alertname=~"Electrs.*|Bitcoind(NoPeers|LowOutboundPeers|NoNewBlocks|BehindFleet|BlocksBehindHeaders|InitialBlockDownloadStalled|RejectedChainAhead|RestartLoop)"
+    equal: [node]
+
+  # electrs down: its serving, index and SLO alerts are symptoms.
+  - source_matchers: [alertname="ElectrsDown"]
+    target_matchers:
+      - alertname=~"Electrs(IndexBehind|MainLoopStalled|InitialSyncStalled|StaleCleanupFailing|MempoolSyncFailing|BitcoindRPC.*|.*Burn(Fast|Slow))"
+    equal: [node]
+
+  # A fast burn already pages; the slow burn of the same SLO adds nothing.
+  - source_matchers: [alertname=~"Electrs.*BurnFast"]
+    target_matchers: [alertname=~"Electrs.*BurnSlow"]
+    equal: [node, slo]
